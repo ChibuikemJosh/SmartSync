@@ -26,7 +26,7 @@ def _post(endpoint: str, payload: dict) -> dict:
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Squad API request failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Squad API request failed") from exc
 
 
 def create_virtual_account(payload: dict) -> dict:
