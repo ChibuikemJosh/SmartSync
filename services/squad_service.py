@@ -4,21 +4,19 @@ import requests
 from fastapi import HTTPException
 
 
-SQUAD_BASE_URL = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com")
-SQUAD_SECRET_KEY = os.getenv("SQUAD_SECRET_KEY", "")
-
-
 def _headers() -> dict:
+    squad_secret_key = os.getenv("SQUAD_SECRET_KEY", "")
     headers = {"Content-Type": "application/json"}
-    if SQUAD_SECRET_KEY:
-        headers["Authorization"] = f"Bearer {SQUAD_SECRET_KEY}"
+    if squad_secret_key:
+        headers["Authorization"] = f"Bearer {squad_secret_key}"
     return headers
 
 
 def _post(endpoint: str, payload: dict) -> dict:
+    squad_base_url = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com")
     try:
         response = requests.post(
-            f"{SQUAD_BASE_URL}{endpoint}",
+            f"{squad_base_url}{endpoint}",
             json=payload,
             headers=_headers(),
             timeout=30,
@@ -27,7 +25,7 @@ def _post(endpoint: str, payload: dict) -> dict:
         return response.json()
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else 502
-        client_status_code = status_code if 400 <= status_code <= 599 else 502
+        client_status_code = status_code if 400 <= status_code <= 499 else 502
         raise HTTPException(
             status_code=client_status_code,
             detail=f"Squad API request failed (upstream status: {status_code})",
