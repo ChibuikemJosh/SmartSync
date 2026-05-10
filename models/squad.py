@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic import BaseModel
 
 
@@ -9,6 +11,6 @@ class VirtualAccountRequest(BaseModel):
 
 
 class PaymentLinkRequest(BaseModel):
-    amount: float
+    amount: Decimal
     currency: str = "NGN"
     description: str | None = None

@@ -28,7 +28,8 @@ def _post(endpoint: str, payload: dict) -> dict:
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else 502
         raise HTTPException(
-            status_code=502, detail=f"Squad API request failed with status {status_code}"
+            status_code=502,
+            detail=f"Squad API request failed (upstream status: {status_code})",
         ) from exc
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail="Squad API request failed") from exc
