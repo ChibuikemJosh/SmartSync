@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
+import shutil
 import tempfile
 import os
 from services.ai_logic import process_voice_entry
@@ -19,47 +20,32 @@ graph_service = GraphService()
 
 @router.post("/process-voice")
 async def process_voice(user_id: str, file: UploadFile = File(...)):
-    # 1. (Future step) Convert Audio to Text using Whisper
-    # For now, let's assume we have the text
-    try:
-        filename = file.filename or ""
-        if not filename.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
+    # 1. Convert Audio to Text using Whisper
+    filename = file.filename or ""
+    if not filename.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
             raise HTTPException(status_code=400, detail="Invalid audio format")
-        
-        # 2. Save uploaded file to a temporary path and pass the path to process_voice_entry
-        suffix = os.path.splitext(filename)[1] or ""
-        tmp_path = None
+    
+    suffix = os.path.splitext(filename)[1]
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
         try:
-            content = await file.read()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
+            # Run the full AI Pipeline
+            final_data = process_voice_entry(tmp_path)
 
-            structured_data = process_voice_entry(tmp_path)
+            if final_data:
+                # Save to Neo4j (using your GraphService)
+                new_score = graph_service.log_transaction(user_id, final_data)
+                return {"status": "success", "data": final_data, "score": new_score}
+            
+            return {"status": "error", "message": "Could not process audio"}
+        
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    logger.warning(f"Could not remove temp file {tmp_path}")
-
-        if not structured_data:
-            return {"error": "AI could not parse the voice note"}
-
-        # 3. Save to Neo4j and update Score
-        result = graph_service.log_transaction(user_id, structured_data)
-    
-        return {
-            "status": "success",
-            "data": structured_data,
-            "new_trust_score": result
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing voice: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to process voice file")
-    
+            # Always delete the temporary file after processing
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
 class VoiceProcessResponse(BaseModel):
     """Response model for voice processing"""
