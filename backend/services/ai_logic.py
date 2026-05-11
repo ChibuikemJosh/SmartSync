@@ -17,6 +17,25 @@ def _get_client() -> Groq:
     http_client = httpx.Client()
     return Groq(api_key=api_key, http_client=http_client)
 
+def transcribe_audio(file_path: str) -> str:
+    """
+    Uses Groq's Whisper model to turn audio into text.
+    Supports .m4a, .mp3, .wav, etc.
+    """
+    client = _get_client()
+    
+    try:
+        with open(file_path, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(file_path, file.read()),
+                model="whisper-large-v3-turbo",  # The fastest/newest Whisper model on Groq
+                response_format="text",         # Just get the string back
+                language="en"                   # Forces English to avoid translation glitches
+            )
+            return str(transcription)
+    except Exception as e:
+        print(f"❌ Transcription Error: {e}")
+        return ""
 
 def parse_voice_to_json(transcription_text):
     """Turn informal market talk into structured transaction data."""
@@ -62,6 +81,3 @@ Return ONLY JSON in this format:
         print(f"Validation or JSON Error: {e}")
         # Return a safe default or raise an error for the route to handle
         return None
-
-print(parse_voice_to_json("I just sold four crates of eggs for 12,000 naira to Mama Ngozi."))
-
