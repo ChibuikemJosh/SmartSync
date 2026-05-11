@@ -1,5 +1,7 @@
 import json
 import os
+from pydantic import ValidationError
+from models.schemas import VoiceTransaction 
 from dotenv import load_dotenv
 
 from groq import Groq
@@ -49,7 +51,17 @@ Return ONLY JSON in this format:
         response_format={"type": "json_object"},
     )
 
-    content = chat_completion.choices[0].message.content
-    return json.loads(content) if content else {}
+    content = chat_completion.choices[0].message.content if chat_completion.choices else ""
+
+    try:
+        raw_data = json.loads(content)
+        # VALIDATION HAPPENS HERE:
+        validated_data = VoiceTransaction(**raw_data)
+        return validated_data.model_dump() # Returns a clean, safe dict
+    except (json.JSONDecodeError, ValidationError) as e:
+        print(f"Validation or JSON Error: {e}")
+        # Return a safe default or raise an error for the route to handle
+        return None
 
 print(parse_voice_to_json("I just sold four crates of eggs for 12,000 naira to Mama Ngozi."))
+
