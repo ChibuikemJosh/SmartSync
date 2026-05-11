@@ -3,15 +3,49 @@ AI Processing Routes
 Handles Voice-to-JSON and OCR (Image-to-JSON) processing
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
+from services.ai_logic import parse_voice_to_json
+from services.database import GraphService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+graph_service = GraphService()
 
+@router.post("/process-voice")
+async def process_voice(user_id: str, file: UploadFile = File(...)):
+    # 1. (Future step) Convert Audio to Text using Whisper
+    # For now, let's assume we have the text
+    try:
+        filename = file.filename or ""
+        if not filename.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
+            raise HTTPException(status_code=400, detail="Invalid audio format")
+        
+        raw_text = "I sold 4 crates of eggs for 12000 naira" 
+    
+        # 2. Parse with AI
+        structured_data = parse_voice_to_json(raw_text)
+    
+        if not structured_data:
+            return {"error": "AI could not parse the voice note"}
+
+        # 3. Save to Neo4j and update Score
+        result = graph_service.log_transaction(user_id, structured_data)
+    
+        return {
+            "status": "success",
+            "data": structured_data,
+            "new_trust_score": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing voice: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to process voice file")
+    
 
 class VoiceProcessResponse(BaseModel):
     """Response model for voice processing"""
@@ -29,46 +63,6 @@ class OCRProcessResponse(BaseModel):
     image_text: str
 
 
-@router.post("/process-voice", response_model=VoiceProcessResponse)
-async def process_voice(file: UploadFile = File(...)):
-    """
-    Convert voice transaction to structured JSON
-    Speech-to-JSON processing for voice-based transactions
-    
-    Args:
-        file: Audio file containing the transaction voice note
-        
-    Returns:
-        VoiceProcessResponse with extracted transaction data
-    """
-    try:
-        if not file.filename.endswith(('.mp3', '.wav', '.m4a', '.ogg')):
-            raise HTTPException(status_code=400, detail="Invalid audio format")
-        
-        logger.info(f"Processing voice file: {file.filename}")
-        
-        # TODO: Integrate with speech-to-text service (e.g., Google Cloud Speech-to-Text)
-        # For now, returning mock data
-        
-        return VoiceProcessResponse(
-            status="success",
-            transaction_data={
-                "type": "sale",
-                "amount": 1500.00,
-                "customer": "John Doe",
-                "items": ["Rice - 5kg", "Beans - 3kg"],
-                "timestamp": "2026-05-10T10:30:00Z"
-            },
-            confidence=0.92,
-            raw_text="Sold five kilos of rice and three kilos of beans to John Doe for fifteen hundred naira"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing voice: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to process voice file")
-
-
 @router.post("/process-ocr", response_model=OCRProcessResponse)
 async def process_ocr(file: UploadFile = File(...)):
     """
@@ -82,7 +76,8 @@ async def process_ocr(file: UploadFile = File(...)):
         OCRProcessResponse with extracted data
     """
     try:
-        if not file.filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+        filename = file.filename or ""
+        if not filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
             raise HTTPException(status_code=400, detail="Invalid image format")
         
         logger.info(f"Processing OCR file: {file.filename}")
@@ -157,3 +152,4 @@ async def get_ocr_status(job_id: str):
     except Exception as e:
         logger.error(f"Error checking OCR status: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to check job status")
+
