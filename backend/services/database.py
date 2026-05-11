@@ -99,3 +99,27 @@ class GraphService:
         log_scaled = 40 + (math.log(total_weighted_points + 1, 1.1))
         
         return min(100, round(log_scaled))
+
+def verify_transaction(self, user_id, amount):
+    """
+    Finds the most recent unverified 'SALE' of a similar amount 
+    and marks it as verified.
+    """
+    with self.driver.session() as session:
+        query = """
+        MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction {type: 'SALE', verified: false})
+        WHERE t.amount >= $min_amount AND t.amount <= $max_amount
+        WITH t
+        ORDER BY t.timestamp DESC
+        LIMIT 1
+        SET t.verified = true, t.verified_at = $v_time
+        RETURN t.item as item
+        """
+        # We allow a small margin (e.g., +/- 10%) in case of fees or rounding
+        result = session.run(query, 
+            user_id=user_id, 
+            min_amount=amount * 0.9, 
+            max_amount=amount * 1.1,
+            v_time=datetime.now(timezone.utc).isoformat()
+        )
+        return result.single()
