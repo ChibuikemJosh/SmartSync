@@ -7,7 +7,9 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
-from services.ai_logic import parse_voice_to_json
+import tempfile
+import os
+from services.ai_logic import process_voice_entry
 from services.database import GraphService
 
 logger = logging.getLogger(__name__)
@@ -24,11 +26,23 @@ async def process_voice(user_id: str, file: UploadFile = File(...)):
         if not filename.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
             raise HTTPException(status_code=400, detail="Invalid audio format")
         
-        raw_text = "I sold 4 crates of eggs for 12000 naira" 
-    
-        # 2. Parse with AI
-        structured_data = parse_voice_to_json(raw_text)
-    
+        # 2. Save uploaded file to a temporary path and pass the path to process_voice_entry
+        suffix = os.path.splitext(filename)[1] or ""
+        tmp_path = None
+        try:
+            content = await file.read()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+
+            structured_data = process_voice_entry(tmp_path)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    logger.warning(f"Could not remove temp file {tmp_path}")
+
         if not structured_data:
             return {"error": "AI could not parse the voice note"}
 

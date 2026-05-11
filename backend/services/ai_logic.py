@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 from groq import Groq
 import httpx
 
+
 load_dotenv()
+
 
 def _get_client() -> Groq:
     api_key = os.getenv("GROQ_API_KEY")
@@ -17,6 +19,7 @@ def _get_client() -> Groq:
     http_client = httpx.Client()
     return Groq(api_key=api_key, http_client=http_client)
 
+
 def transcribe_audio(file_path: str) -> str:
     """
     Uses Groq's Whisper model to turn audio into text.
@@ -25,6 +28,9 @@ def transcribe_audio(file_path: str) -> str:
     client = _get_client()
     
     try:
+        file_path = file_path.strip('"') or ""
+        if not file_path.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
+            raise Exception("Invalid audio format")
         with open(file_path, "rb") as file:
             transcription = client.audio.transcriptions.create(
                 file=(file_path, file.read()),
@@ -36,6 +42,7 @@ def transcribe_audio(file_path: str) -> str:
     except Exception as e:
         print(f"❌ Transcription Error: {e}")
         return ""
+
 
 def parse_voice_to_json(transcription_text):
     """Turn informal market talk into structured transaction data."""
@@ -81,3 +88,18 @@ Return ONLY JSON in this format:
         print(f"Validation or JSON Error: {e}")
         # Return a safe default or raise an error for the route to handle
         return None
+    
+
+def process_voice_entry(audio_file_path: str):
+    """
+    The full pipeline: Audio -> Text -> JSON -> Validated Dict
+    """
+    # 1. Audio to Text
+    raw_text = transcribe_audio(audio_file_path)
+    if not raw_text:
+        return None
+
+    # 2. Text to JSON (using the function we built earlier)
+    structured_data = parse_voice_to_json(raw_text)
+    
+    return structured_data
