@@ -73,7 +73,8 @@ class GraphService:
         tx.run("MATCH (u:User {id: $user_id}) SET u.trust_score = $score", 
                user_id=user_id, score=score)
 
-    def calculate_decayed_score(self, transactions, half_life_days=14):
+    @staticmethod
+    def calculate_decayed_score(transactions, half_life_days=14):
         """The 'Intelligent' part of the economy"""
         if not transactions:
             return 43 # Starting base score
@@ -99,6 +100,47 @@ class GraphService:
         log_scaled = 40 + (math.log(total_weighted_points + 1, 1.1))
         
         return min(100, round(log_scaled))
+    
+def get_user_dashboard(self, user_id):
+    """
+    Fetches the profile, current score, and recent transaction history.
+    """
+    with self.driver.session() as session:
+        query = """
+        MATCH (u:User {id: $user_id})
+        OPTIONAL MATCH (u)-[:PERFORMED]->(t:Transaction)
+        WITH u, t
+        ORDER BY t.timestamp DESC
+        LIMIT 10
+        RETURN u.name as name, 
+               u.trust_score as score, 
+               u.role as role,
+               collect({
+                   item: t.item,
+                   amount: t.amount,
+                   type: t.type,
+                   verified: t.verified,
+                   timestamp: t.timestamp
+               }) as transactions
+        """
+        result = session.run(query, user_id=user_id).single()
+        
+        if not result:
+            return None
+            
+        data = result.data()
+        # Add Tiering logic
+        data['tier'] = self.get_score_tier(data['score'])
+        return data
+
+@staticmethod
+def get_score_tier(score):
+    if score >= 90: return {"name": "Elite", "color": "#FFD700", "next": 100}
+    if score >= 75: return {"name": "Established", "color": "#C0C0C0", "next": 90}
+    if score >= 60: return {"name": "Trusted", "color": "#CD7F32", "next": 75}
+    if score >= 45: return {"name": "Growing", "color": "#4CAF50", "next": 60}
+    return {"name": "New", "color": "#2196F3", "next": 45}
+
 
 def verify_transaction(self, user_id, amount):
     """
