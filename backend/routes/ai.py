@@ -48,7 +48,7 @@ async def process_voice(user_id: str, file: UploadFile = File(...)):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-
+@router.post("/process-ledger")
 async def handle_ledger(user_id: str, file: UploadFile = File(...)):
     # Save image temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
