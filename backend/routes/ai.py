@@ -12,6 +12,7 @@ import tempfile
 import os
 from services.ai_logic import process_voice_entry
 from services.database import GraphService
+from services.ocr_logic import process_ledger_image
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,28 @@ async def process_voice(user_id: str, file: UploadFile = File(...)):
             # Always delete the temporary file after processing
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+
+async def handle_ledger(user_id: str, file: UploadFile = File(...)):
+    # Save image temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        # Run OCR -> AI -> JSON pipeline
+        final_data = process_ledger_image(tmp_path)
+        
+        if final_data:
+            # Save to Neo4j and update Trust Score
+            new_score = graph_service.log_transaction(user_id, final_data)
+            return {"status": "success", "data": final_data, "score": new_score}
+            
+        return {"status": "error", "message": "Could not read ledger photo"}
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
 
 class VoiceProcessResponse(BaseModel):
     """Response model for voice processing"""
