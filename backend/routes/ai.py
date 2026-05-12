@@ -3,50 +3,65 @@ AI Processing Routes
 Handles Voice-to-JSON and OCR (Image-to-JSON) processing
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Depends
 from pydantic import BaseModel
+
 from typing import Optional, Dict, Any
 import logging
 import shutil
 import tempfile
 import os
-from services.ai_logic import process_voice_entry
+import uuid
+
+from services.ai_logic import process_voice_entry, update_job_status, get_job_status
 from services.database import GraphService
 from services.ocr_logic import process_ledger_image
+
+from utils.helpers import save_temp_file
+
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 graph_service = GraphService()
 
+
+async def run_ai_pipeline(job_id: str, user_id: str, tmp_path: str):
+    try:
+        final_data = process_voice_entry(tmp_path)
+
+        if final_data:
+            new_score = graph_service.log_transaction(user_id, final_data)
+
+            update_job_status(job_id, "completed", {
+                "result": final_data, 
+                "new_score": new_score
+            })
+        else:
+            update_job_status(job_id, "failed", {"error": "AI parsing failed"})
+
+    except Exception as e:
+        # 4. Handle unexpected crashes
+        update_job_status(job_id, "failed", {"error": str(e)})
+    
+    finally:
+        # 5. Clean up the temp file so the server disk doesn't fill up
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 @router.post("/process-voice")
-async def process_voice(user_id: str, file: UploadFile = File(...)):
-    # 1. Convert Audio to Text using Whisper
-    filename = file.filename or ""
-    if not filename.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
-            raise HTTPException(status_code=400, detail="Invalid audio format")
-    
-    suffix = os.path.splitext(filename)[1]
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+async def process_voice(user_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    job_id = str(uuid.uuid4()) # Generate a unique "Buzzer" ID
 
-        try:
-            # Run the full AI Pipeline
-            final_data = process_voice_entry(tmp_path)
+    update_job_status(job_id, "processing")
 
-            if final_data:
-                # Save to Neo4j (using your GraphService)
-                new_score = graph_service.log_transaction(user_id, final_data)
-                return {"status": "success", "data": final_data, "score": new_score}
-            
-            return {"status": "error", "message": "Could not process audio"}
-        
-        finally:
-            # Always delete the temporary file after processing
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+    tmp_path = await save_temp_file(file)
+
+    background_tasks.add_task(run_ai_pipeline, job_id, user_id, tmp_path)
+
+    return {"status": "accepted", "job_id": job_id}
+
 
 @router.post("/process-ledger")
 async def handle_ledger(user_id: str, file: UploadFile = File(...)):
@@ -68,111 +83,3 @@ async def handle_ledger(user_id: str, file: UploadFile = File(...)):
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
-
-
-class VoiceProcessResponse(BaseModel):
-    """Response model for voice processing"""
-    status: str
-    transaction_data: Dict[str, Any]
-    confidence: float
-    raw_text: str
-
-
-class OCRProcessResponse(BaseModel):
-    """Response model for OCR processing"""
-    status: str
-    extracted_data: Dict[str, Any]
-    confidence: float
-    image_text: str
-
-
-@router.post("/process-ocr", response_model=OCRProcessResponse)
-async def process_ocr(file: UploadFile = File(...)):
-    """
-    Extract structured data from ledger images
-    Image-to-JSON processing for paper ledger digitization
-    
-    Args:
-        file: Image file containing the physical ledger
-        
-    Returns:
-        OCRProcessResponse with extracted data
-    """
-    try:
-        filename = file.filename or ""
-        if not filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-            raise HTTPException(status_code=400, detail="Invalid image format")
-        
-        logger.info(f"Processing OCR file: {file.filename}")
-        
-        # TODO: Integrate with OCR service (e.g., Tesseract, Google Cloud Vision)
-        # For now, returning mock data
-        
-        return OCRProcessResponse(
-            status="success",
-            extracted_data={
-                "date": "2026-05-10",
-                "entries": [
-                    {"description": "Morning Sales", "amount": 5000.00},
-                    {"description": "Afternoon Stock", "amount": 3000.00},
-                    {"description": "Evening Sales", "amount": 2500.00}
-                ],
-                "total": 10500.00
-            },
-            confidence=0.87,
-            image_text="May 10, 2026 - Morning Sales: 5000 | Afternoon Stock: 3000 | Evening Sales: 2500"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing OCR: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to process image")
-
-
-@router.get("/voice-status/{job_id}")
-async def get_voice_status(job_id: str):
-    """
-    Get the status of a voice processing job
-    
-    Args:
-        job_id: The ID of the voice processing job
-        
-    Returns:
-        Current status of the job
-    """
-    try:
-        logger.info(f"Checking voice job status: {job_id}")
-        # TODO: Implement job tracking
-        return {
-            "status": "completed",
-            "job_id": job_id,
-            "progress": 100
-        }
-    except Exception as e:
-        logger.error(f"Error checking voice status: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to check job status")
-
-
-@router.get("/ocr-status/{job_id}")
-async def get_ocr_status(job_id: str):
-    """
-    Get the status of an OCR processing job
-    
-    Args:
-        job_id: The ID of the OCR processing job
-        
-    Returns:
-        Current status of the job
-    """
-    try:
-        logger.info(f"Checking OCR job status: {job_id}")
-        # TODO: Implement job tracking
-        return {
-            "status": "completed",
-            "job_id": job_id,
-            "progress": 100
-        }
-    except Exception as e:
-        logger.error(f"Error checking OCR status: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to check job status")
-

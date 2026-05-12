@@ -3,7 +3,7 @@ Pydantic models for validation and documentation
 """
 
 from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 
 class VoiceTransaction(BaseModel):
@@ -24,7 +24,18 @@ class VoiceTransaction(BaseModel):
                 return int(float(clean_v.replace("K", "")) * 1000)
             return int(clean_v)
         return v
+    
 
+class VoiceProcessResponse(BaseModel):
+    status: str
+    transaction: Optional[VoiceTransaction] = None
+    message: Optional[str] = None
+
+class OCRProcessResponse(BaseModel):
+    """Response model for OCR processing"""
+    status: str
+    extracted_data: Dict[str, Any]
+    image_text: str
 
 class LocationSchema(BaseModel):
     city: str

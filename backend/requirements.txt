@@ -11,3 +11,4 @@ opencv-python-headless  # Use 'headless' for cloud/server environments like Code
 torch
 torchvision
 neo4j
+redis

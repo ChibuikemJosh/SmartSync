@@ -1,14 +1,51 @@
 import json
 import os
-from pydantic import ValidationError
-from models.schemas import VoiceTransaction 
+from typing import Any as any, cast, Dict
 from dotenv import load_dotenv
 
+from pydantic import ValidationError
 from groq import Groq
 import httpx
+import redis
+
+from models.schemas import VoiceTransaction
 
 
 load_dotenv()
+
+
+# Connect to local Redis (default port 6379)
+# decode_responses=True converts bytes to strings automatically
+r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+
+def update_job_status(job_id: str, status: str, data: any = None):
+    """Helper to update job status in Redis"""
+    job_key = f"job:{job_id}"
+    r.hset(job_key, mapping={"status": status, "data": json.dumps(data) if data else ""})
+    # Set a TTL of 1 hour for cleanup
+    r.expire(job_key, 3600)
+
+def get_job_status(job_id: str):
+    """
+    Fetches job data from Redis and parses the JSON string back into a Python object.
+    """
+    job_key = f"job:{job_id}"
+    job = r.hgetall(job_key)
+    # Cast to a concrete dict type for static/type checkers (some redis clients may be awaitable)
+    job = cast(Dict[str, str], job)
+
+    if not job:
+        return None
+
+    # Convert the JSON string back into a Python dictionary/list
+    if job.get("data"):
+        try:
+            job["data"] = json.loads(job["data"])
+        except json.JSONDecodeError:
+            pass 
+            
+    return job
 
 
 def _get_client() -> Groq:
