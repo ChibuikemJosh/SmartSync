@@ -26,8 +26,7 @@ class VoiceTransaction(BaseModel):
                     result = int(float(clean_v.replace("K", "")) * 1000)
                     return result
                 except ValueError:
-                    pass
-            return int(clean_v)
+                    return 0 # Default to 0 if we can't parse it
         return v
     
     @validator('quantity', pre=True)
