@@ -11,6 +11,7 @@ class VoiceTransaction(BaseModel):
     amount: int = Field(..., gt=0, description="The cost in Naira (must be positive)")
     quantity: int = Field(default=1)
     type: str = Field(..., pattern="^(SALE|EXPENSE)$")
+    timestamp: Optional[str] = None
     notes: Optional[str] = "No additional notes"
     verified: bool = False # Default to False until verified by Squad
 
@@ -21,7 +22,11 @@ class VoiceTransaction(BaseModel):
             # Strip NGN, commas, and handle 'k'
             clean_v = v.upper().replace("NGN", "").replace("NAIRA", "").replace(",", "").strip()
             if 'K' in clean_v:
-                return int(float(clean_v.replace("K", "")) * 1000)
+                try:
+                    result = int(float(clean_v.replace("K", "")) * 1000)
+                    return result
+                except ValueError:
+                    pass
             return int(clean_v)
         return v
     
@@ -43,31 +48,24 @@ class LocationSchema(BaseModel):
     country: str
 
 
-class UserProfile(BaseModel):
-    id: str = Field(..., description="Unique ID")
-    name: str
-    role: str = Field(..., pattern="^(Trader|Worker|Both)$")
-    location: LocationSchema
-    trust_score: int = 43
-    tier_name: str = "New"
-    skills: Optional[list[str]] = []
-
-
-class DashboardData(BaseModel):
-    profile: UserProfile
-    recent_activity: List[VoiceTransaction]
-
-
 class TierInfo(BaseModel):
     name: str
     color: str
     next_milestone: int
 
 
-class DashboardResponse(BaseModel):
+class UserProfile(BaseModel):
+    id: str = Field(..., description="Unique ID")
     name: str
-    trust_score: int
+    role: str = Field(..., pattern="^(Trader|Worker|Both)$")
+    location: LocationSchema
+    trust_score: int = 43
     tier: TierInfo
+    skills: Optional[list[str]] = []
+
+
+class DashboardResponse(BaseModel):
+    profile: UserProfile
     recent_transactions: list[VoiceTransaction]
 
 
