@@ -30,6 +30,20 @@ class VoiceTransaction(BaseModel):
             return int(clean_v)
         return v
     
+    @validator('quantity', pre=True)
+    def ensure_int_quantity(cls, v):
+        """Ensures quantity is a clean integer, even if AI sends strings or floats."""
+        if isinstance(v, str):
+            try:
+                # Handle common textual numbers (Optional: add a dict for 'one','two', etc. if needed)
+                clean_v = v.strip().split()[0] # Take first part in case of "5 units"
+                return int(float(clean_v))
+            except (ValueError, TypeError):
+                return 1 # Default to 1 if we can't parse it
+        if isinstance(v, float):
+            return int(v)
+        return v
+    
 
 class VoiceProcessResponse(BaseModel):
     status: str
