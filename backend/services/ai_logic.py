@@ -93,7 +93,7 @@ def parse_voice_to_json(transcription_text):
     """Turn informal market talk into structured transaction data."""
     prompt = f"""
 You are an expert Nigerian Market Bookkeeper for the SmartSync platform.
-Your goal is to turn informal market talk into structured financial data.
+Your goal is to turn informal market talk (Either English or Nigerian Pidgin) into structured financial data.
 
 EXAMPLES:
 User: "I just sold four crates of eggs for 12,000 naira to Mama Ngozi."
@@ -101,6 +101,13 @@ Expected JSON: {{"item": "eggs", "amount": 12000, "quantity": 4, "type": "SALE",
 
 User: "I spent 5k on transport for the delivery today."
 Expected JSON: {{"item": "transport", "amount": 5000, "quantity": 1, "type": "EXPENSE", "notes": "Delivery"}}
+
+PIDGIN CONTEXT EXAMPLES:
+- "I don sell market" -> SALE
+- "I buy market" -> EXPENSE
+- "Customer neva pay" -> SALE (but mark notes as 'Pending')
+- "Waybill money" -> EXPENSE (item: 'Delivery/Waybill')
+- "Dash" -> EXPENSE (item: 'Gift/Discount')
 
 INPUT TO PROCESS:
 "{transcription_text}"
