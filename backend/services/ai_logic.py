@@ -95,12 +95,25 @@ def parse_voice_to_json(transcription_text):
 You are an expert Nigerian Market Bookkeeper for the SmartSync platform.
 Your goal is to turn informal market talk (Either English or Nigerian Pidgin) into structured financial data.
 
-EXAMPLES:
-User: "I just sold four crates of eggs for 12,000 naira to Mama Ngozi."
-Expected JSON: {{"item": "eggs", "amount": 12000, "quantity": 4, "type": "SALE", "notes": "Customer: Mama Ngozi"}}
+STRICT UNIT CATEGORIZATION:
+Identify the unit of measurement. Common Nigerian units include:
+- "Bag" (e.g., 50kg bag, small bag)
+- "Derica" (Common for rice, beans, garri)
+- "Paint" (Paint bucket/rubber)
+- "Crate" (For eggs)
+- "Kilo/KG" (For meat/frozen foods)
+- "Piece/Unit" (For single items like bread, phone chargers)
+- "Carton" (For noodles, drinks)
 
-User: "I spent 5k on transport for the delivery today."
-Expected JSON: {{"item": "transport", "amount": 5000, "quantity": 1, "type": "EXPENSE", "notes": "Delivery"}}
+EXAMPLES:
+User: "I sell one paint of garri for 3500"
+Expected JSON: {{"item": "garri", "amount": 3500, "quantity": 1, "unit": "paint", "type": "SALE", "notes": ""}}
+
+User: "Buy two derica of rice 2400 naira"
+Expected JSON: {{"item": "rice", "amount": 2400, "quantity": 2, "unit": "derica", "type": "EXPENSE", "notes": ""}}
+
+User: "I sell 5 bag of sachet water"
+Expected JSON: {{"item": "sachet water", "amount": 1000, "quantity": 5, "unit": "bag", "type": "SALE", "notes": ""}}
 
 PIDGIN CONTEXT EXAMPLES:
 - "I don sell market" -> SALE
@@ -114,12 +127,13 @@ INPUT TO PROCESS:
 
 INSTRUCTIONS:
 - Return ONLY valid JSON.
+- if the unit is not mentioned, default to "item".
 - If the user uses 'k', convert it to thousands (e.g., 5k = 5000).
 - Categorize as SALE or EXPENSE.
 - Default quantity to 1 if the speaker does not mention one.
 
 Return ONLY JSON in this format:
-{{"item": str, "amount": int, "quantity": int, "type": "SALE" | "EXPENSE", "notes": str}}
+{{"item": str, "amount": int, "quantity": int, "unit": str, "type": "SALE" | "EXPENSE", "notes": str}}
 """
 
     client = _get_client()

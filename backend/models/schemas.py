@@ -10,6 +10,7 @@ class VoiceTransaction(BaseModel):
     item: str = Field(..., description="The name of the item sold or expense incurred")
     amount: int = Field(..., gt=0, description="The cost in Naira (must be positive)")
     quantity: int = Field(default=1)
+    unit: str = Field(default="item", description="The unit of the item (e.g., 'kg', 'piece', bag, derica, paint, kg)")
     type: str = Field(..., pattern="^(SALE|EXPENSE)$")
     timestamp: Optional[str] = None
     notes: Optional[str] = "No additional notes"

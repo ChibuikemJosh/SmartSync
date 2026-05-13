@@ -181,3 +181,20 @@ class GraphService:
                 v_time=datetime.now(timezone.utc).isoformat()
             )
             return result.single()
+
+    def check_price_anomaly(self, item, unit, amount, quantity):
+        price_per_unit = amount / quantity
+        with self.driver.session() as session:
+            query = """
+            MATCH (t:Transaction {item: $item, unit: $unit})
+            RETURN avg(t.amount / t.quantity) as avg_price, 
+                   stDev(t.amount / t.quantity) as std_dev
+            """
+            result = session.run(query, item=item, unit=unit).single()
+        
+            if result and result['avg_price']:
+                avg = result['avg_price']
+                # If price is 3x the average, it's a huge anomaly
+                if price_per_unit > (avg * 3):
+                    return True, avg
+        return False, 0
