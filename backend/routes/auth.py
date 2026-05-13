@@ -9,7 +9,7 @@ db = GraphService()
 async def register_user(user: UserCreate):
     try:
         # 1. Prepare data for Neo4j
-        user_dict = user.dict()
+        user_dict = user.model_dump()  # Convert Pydantic model to dict
         
         # 2. Save to Graph
         db.create_user_node(user_dict)
