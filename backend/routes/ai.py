@@ -18,7 +18,7 @@ from services.ocr_logic import process_ledger_image
 
 from utils.helpers import save_temp_file
 
-from models.schemas import VoiceProcessResponse, ErrorResponse
+from models.schemas import VoiceTransaction, VoiceProcessResponse, ErrorResponse
 
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,26 @@ async def run_ai_pipeline(job_id: str, user_id: str, tmp_path: str):
         if final_data:
             new_score = graph_service.log_transaction(user_id, final_data)
 
-            update_job_status(job_id, "completed", {
-                "result": final_data, 
-                "new_score": new_score
-            })
+            verified_item = graph_service.verify_transaction(user_id, final_data)
+
+            if verified_item:
+                history = graph_service.get_user_history(user_id)
+                new_score = graph_service.calculate_decayed_score(history)
+                graph_service.update_user_score(user_id, new_score)
+
+                update_job_status(job_id, "completed", {
+                    "result": final_data, 
+                    "new_score": new_score,
+                    "verified": True,
+                    "message": f"Transaction verified"
+                    })
+            else:
+                update_job_status(job_id, "completed", {
+                    "result": final_data, 
+                    "new_score": new_score,
+                    "verified": False,
+                    "message": f"Transaction could not be verified"
+                    })
         else:
             update_job_status(job_id, "failed", {"error": "AI parsing failed"})
 
@@ -110,3 +126,9 @@ async def check_status(job_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Job ID not found")
     return status
+
+@router.post("/confirm-transaction")
+async def confirm_tx(user_id: str, data: VoiceTransaction):
+    # This is where the data is FINALLY saved to Neo4j
+    new_score = graph_service.log_transaction(user_id, data.dict())
+    return {"status": "success", "new_score": new_score}

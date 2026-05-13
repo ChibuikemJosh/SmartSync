@@ -21,6 +21,33 @@ class GraphService:
     def close(self):
         self.driver.close()
 
+    def create_user_node(self, user_data):
+        """Creates a new user with location and base score"""
+        with self.driver.session() as session:
+            query = """
+            MERGE (u:User {id: $id})
+            SET u.name = $name,
+                u.role = $role,
+                u.city = $city,
+                u.state = $state,
+                u.country = $country,
+                u.trust_score = $trust_score,
+                u.skills = $skills,
+                u.created_at = $created_at
+            RETURN u.id
+            """
+            session.run(query,
+                id=user_data['id'],
+                name=user_data['name'],
+                role=user_data['role'],
+                city=user_data['location']['city'],
+                state=user_data['location']['state'],
+                country=user_data['location']['country'],
+                trust_score=user_data.get('trust_score', 43),
+                skills=user_data.get('skills', []),
+                created_at=datetime.now(timezone.utc).isoformat()
+            )
+
     def log_transaction(self, user_id, tx_data):
         """Logs the sale, then recalculates the dynamic Trust Score"""
         with self.driver.session() as session:
@@ -45,6 +72,7 @@ class GraphService:
         CREATE (t:Transaction {
             item: $item,
             amount: $amount,
+            quantity: $quantity,
             type: $type,
             timestamp: $timestamp,
             verified: false
@@ -54,7 +82,8 @@ class GraphService:
         tx.run(query, 
             user_id=user_id, 
             item=data['item'], 
-            amount=data['amount'], 
+            amount=data.get('amount', 0), 
+            quantity=data.get('quantity', 1),
             type=data['type'],
             timestamp=datetime.now(timezone.utc).isoformat()
         )
@@ -101,67 +130,54 @@ class GraphService:
         
         return min(100, round(log_scaled))
     
-def get_user_dashboard(self, user_id):
-    """
-    Fetches the profile, current score, and recent transaction history.
-    """
-    with self.driver.session() as session:
-        query = """
-        MATCH (u:User {id: $user_id})
-        OPTIONAL MATCH (u)-[:PERFORMED]->(t:Transaction)
-        WITH u, t
-        ORDER BY t.timestamp DESC
-        LIMIT 10
-        RETURN u.name as name, 
-               u.trust_score as score, 
-               u.role as role,
-               collect({
-                   item: t.item,
-                   amount: t.amount,
-                   type: t.type,
-                   verified: t.verified,
-                   timestamp: t.timestamp
-               }) as transactions
-        """
-        result = session.run(query, user_id=user_id).single()
-        
-        if not result:
-            return None
+    def get_user_dashboard(self, user_id):
+        with self.driver.session() as session:
+            query = """
+            MATCH (u:User {id: $user_id})
+            OPTIONAL MATCH (u)-[:PERFORMED]->(t:Transaction)
+            WITH u, t
+            ORDER BY t.timestamp DESC
+            LIMIT 10
+            RETURN u.name as name, 
+                   u.trust_score as score, 
+                   u.role as role,
+                   u.city as city, u.state as state, u.country as country,
+                   collect({
+                       item: t.item,
+                       amount: t.amount,
+                       type: t.type,
+                       verified: t.verified,
+                       timestamp: t.timestamp
+                   }) as transactions
+            """
+            result = session.run(query, user_id=user_id).single()
+            if not result: return None
             
-        data = result.data()
-        # Add Tiering logic
-        data['tier'] = self.get_score_tier(data['score'])
-        return data
+            data = result.data()
+            data['tier'] = self.get_score_tier(data['score'])
+            return data
 
-@staticmethod
-def get_score_tier(score):
-    if score >= 90: return {"name": "Elite", "color": "#FFD700", "next": 100}
-    if score >= 75: return {"name": "Established", "color": "#C0C0C0", "next": 90}
-    if score >= 60: return {"name": "Trusted", "color": "#CD7F32", "next": 75}
-    if score >= 45: return {"name": "Growing", "color": "#4CAF50", "next": 60}
-    return {"name": "New", "color": "#2196F3", "next": 45}
-
-
-def verify_transaction(self, user_id, amount):
-    """
-    Finds the most recent unverified 'SALE' of a similar amount 
-    and marks it as verified.
-    """
-    with self.driver.session() as session:
-        query = """
-        MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction {type: 'SALE', verified: false})
-        WHERE t.amount >= $min_amount AND t.amount <= $max_amount
-        WITH t
-        ORDER BY t.timestamp DESC
-        LIMIT 1
-        SET t.verified = true, t.verified_at = $v_time
-        RETURN t.item as item
-        """
-        # We allow a small margin (e.g., +/- 10%) in case of fees or rounding
-        result = session.run(query, 
-            user_id=user_id, 
-            min_amount=amount * 0.9, 
-            max_amount=amount * 1.1,
-            v_time=datetime.now(timezone.utc).isoformat()
-        )
-        return result.single()
+    @staticmethod
+    def get_score_tier(score):
+        if score >= 90: return {"name": "Elite", "color": "#FFD700", "next": 100}
+        if score >= 75: return {"name": "Established", "color": "#C0C0C0", "next": 90}
+        if score >= 60: return {"name": "Trusted", "color": "#CD7F32", "next": 75}
+        if score >= 45: return {"name": "Growing", "color": "#4CAF50", "next": 60}
+        return {"name": "New", "color": "#2196F3", "next": 45}
+    
+    def verify_transaction(self, user_id, amount):
+        with self.driver.session() as session:
+            query = """
+            MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction {type: 'SALE', verified: false})
+            WHERE t.amount >= $min_amount AND t.amount <= $max_amount
+            WITH t ORDER BY t.timestamp DESC LIMIT 1
+            SET t.verified = true, t.verified_at = $v_time
+            RETURN t.item as item
+            """
+            result = session.run(query, 
+                user_id=user_id, 
+                min_amount=amount * 0.9, 
+                max_amount=amount * 1.1,
+                v_time=datetime.now(timezone.utc).isoformat()
+            )
+            return result.single()
