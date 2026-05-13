@@ -11,6 +11,9 @@ import redis
 from models.schemas import VoiceTransaction
 
 
+http_client = httpx.Client()
+
+
 load_dotenv()
 
 
@@ -59,7 +62,6 @@ def _get_client() -> Groq:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not set")
     # Pass an explicit httpx client to avoid incompatible kwargs
-    http_client = httpx.Client()
     return Groq(api_key=api_key, http_client=http_client)
 
 
