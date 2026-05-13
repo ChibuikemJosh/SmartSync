@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any as any, cast, Dict
+from typing import Optional, Any, cast, Dict
 from dotenv import load_dotenv
 
 from pydantic import ValidationError
@@ -19,32 +19,38 @@ load_dotenv()
 r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
 
-def update_job_status(job_id: str, status: str, data: any = None):
+def update_job_status(job_id: str, status: str, data: Optional[Any] = None):
     """Helper to update job status in Redis"""
     job_key = f"job:{job_id}"
     r.hset(job_key, mapping={"status": status, "data": json.dumps(data) if data else ""})
     # Set a TTL of 1 hour for cleanup
     r.expire(job_key, 3600)
 
-def get_job_status(job_id: str):
+
+def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:
     """
     Fetches job data from Redis and parses the JSON string back into a Python object.
     """
     job_key = f"job:{job_id}"
     job = r.hgetall(job_key)
     # Cast to a concrete dict type for static/type checkers (some redis clients may be awaitable)
-    job = cast(Dict[str, str], job)
 
     if not job:
         return None
 
-    # Convert the JSON string back into a Python dictionary/list
-    if job.get("data"):
+    # Use Any for values because we will replace the "data" string with a parsed object
+    job = cast(Dict[str, Any], job)
+    data_str = job.get("data", "") or ""
+    if data_str:
         try:
-            job["data"] = json.loads(job["data"])
+            parsed = json.loads(data_str)
         except json.JSONDecodeError:
-            pass 
-            
+            parsed = {}  # Default to empty dict if parsing fails
+    else:
+        parsed = {}
+
+    job["data"] = parsed
+
     return job
 
 
