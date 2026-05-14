@@ -15,21 +15,27 @@ class VoiceTransaction(BaseModel):
     timestamp: Optional[str] = None
     notes: Optional[str] = "No additional notes"
     verified: bool = False # Default to False until verified by Squad
+    is_anomaly: bool = False # Flag for potential fraud or errors, set by backend logic
 
     @validator('amount', pre=True)
-    def ensure_int(cls, v):
+    def ensure_float_amount(cls, v):
         # In case the AI sends "5000" instead of 5000
         if isinstance(v, str):
             # Strip NGN, commas, and handle 'k'
             clean_v = v.upper().replace("NGN", "").replace("NAIRA", "").replace(",", "").strip()
+            clean_v = re.sub(r'[^\d\.Kk]', '', clean_v) # Remove any non-numeric, non-dot, non-K characters
             if 'K' in clean_v:
                 try:
-                    result = int(float(clean_v.replace("K", "")) * 1000)
+                    result = float(clean_v.replace("K", "")) * 1000
                     return result
                 except ValueError:
-                    return 0 # Default to 0 if we can't parse it
-        return v
-    
+                    return 0.0 # Default to 0.0 if we can't parse it
+        
+        try:
+            return float(clean_v)
+        except ValueError:
+            return float(v) if v else 0.0
+            
     @validator('quantity', pre=True)
     def ensure_int_quantity(cls, v):
         """Ensures quantity is a clean integer, even if AI sends strings or floats."""
@@ -116,7 +122,7 @@ class VirtualAccountRequest(BaseModel):
         pattern = r'^(\+234|0)[789][01]\d{8}$'
         if not re.match(pattern, v):
             raise ValueError('Invalid Nigerian phone number format')
-        return v
+        return v.strip()
 
 
 class VirtualAccountResponse(BaseModel):
@@ -151,7 +157,7 @@ class EscrowRequest(BaseModel):
 
 class WithdrawalRequest(BaseModel):
     user_id: str
-    amount: int          # in Naira
+    amount: float          # in Naira
     bank_code: str
     account_number: str
     narration: Optional[str] = "SmartSync withdrawal"
