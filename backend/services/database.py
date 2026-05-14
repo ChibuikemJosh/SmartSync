@@ -95,13 +95,13 @@ class GraphService:
             )
 
             # 2. Fetch all transactions to calculate the new decayed score
-            history = session.execute_read(self._get_user_history, user_id)
+            history = session.execute_read(self.get_user_history, user_id)
             
             # 3. Calculate the new score in Python
             new_score = self.calculate_decayed_score(history)
             
             # 4. Save the new score back to the User node
-            session.execute_write(self._update_user_score, user_id, new_score)
+            session.execute_write(self.update_user_score, user_id, new_score)
             
             return self.recalculate_user_score(user_id) # Return the updated score for frontend display 
         
@@ -180,7 +180,7 @@ class GraphService:
             return result is not None
 
     @staticmethod
-    def _get_user_history(tx, user_id):
+    def get_user_history(tx, user_id):
         query = """
         MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction)
         RETURN t.amount as amount, t.timestamp as timestamp, t.verified as verified, t.is_anomaly as is_anomaly
@@ -193,7 +193,7 @@ class GraphService:
             return session.execute_read(self._get_user_history, user_id)
 
     @staticmethod
-    def _update_user_score(tx, user_id, score):
+    def update_user_score(tx, user_id, score):
         tx.run("MATCH (u:User {id: $user_id}) SET u.trust_score = $score", 
                user_id=user_id, score=score)
 
@@ -233,16 +233,18 @@ class GraphService:
         with self.driver.session() as session:
             query = """
             MATCH (u:User {id: $user_id})
-            SET u.virtual_account = $acc, u.bank_name = $bank
+            SET u.virtual_account = $account_number,
+                u.bank_name = $bank_name
+            RETURN u
             """
-            session.run(query, user_id=user_id, acc=account_number, bank=bank_name)
+            session.run(query, user_id=user_id, account_number=account_number, bank_name=bank_name)
 
     def recalculate_user_score(self, user_id):
         """Recalculates the user's score based on all their transactions."""
         with self.driver.session() as session:
-            history = session.execute_read(self._get_user_history, user_id)
+            history = session.execute_read(self.get_user_history, user_id)
             new_score = self.calculate_decayed_score(history)
-            session.execute_write(self._update_user_score, user_id, new_score)
+            session.execute_write(self.update_user_score, user_id, new_score)
             return new_score
     
     def get_user_by_email(self, email: str):
@@ -254,6 +256,18 @@ class GraphService:
                    u.role as role, u.trust_score as trust_score
             """
             result = session.run(query, email=email).single()
+            return result.data() if result else None
+    
+    def get_user_by_id(self, user_id: str):
+        """Fetches a user profile by their ID (used by JWT dependency)"""
+        with self.driver.session() as session:
+            query = """
+            MATCH (u:User {id: $user_id})
+            RETURN u.id as id, u.name as name, u.email as email, 
+                   u.role as role, u.trust_score as trust_score,
+                   u.city as city, u.state as state, u.country as country
+            """
+            result = session.run(query, user_id=user_id).single()
             return result.data() if result else None
 
     def get_user_dashboard(self, user_id):

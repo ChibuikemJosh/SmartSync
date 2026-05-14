@@ -2,8 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from models.schemas import UserCreate, UserProfile, TierInfo
 from dotenv import load_dotenv
-from jose import JWTError
-import jwt
+from jose import JWTError, jwt
 import os
 from services.database import GraphService
 from services.auth_logic import hash_password, verify_password, create_access_token
@@ -20,6 +19,9 @@ ALGORITHM = os.getenv("ALGORITHM")
 @router.post("/register", response_model=UserProfile)
 async def register_user(user: UserCreate):
     
+    if db.get_user_by_email(user.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+
     try:
         # 1. Prepare data for Neo4j
         user_dict = user.model_dump()  # Convert Pydantic model to dict

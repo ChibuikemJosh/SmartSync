@@ -17,6 +17,7 @@ from services.database import GraphService
 from services.ocr_logic import process_ledger_image
 
 from utils.helpers import save_temp_file
+from utils.dependencies import get_current_user
 
 from models.schemas import VoiceTransaction, VoiceProcessResponse, ErrorResponse
 
@@ -32,28 +33,10 @@ async def run_ai_pipeline(job_id: str, user_id: str, tmp_path: str):
         final_data = process_voice_entry(tmp_path)
 
         if final_data:
-            new_score = graph_service.log_transaction(user_id, final_data)
-
-            verified_item = graph_service.verify_transaction(user_id, final_data)
-
-            if verified_item:
-                history = graph_service.get_user_history(user_id)
-                new_score = graph_service.calculate_decayed_score(history)
-                graph_service.update_user_score(user_id, new_score)
-
-                update_job_status(job_id, "completed", {
-                    "result": final_data, 
-                    "new_score": new_score,
-                    "verified": True,
-                    "message": f"Transaction verified"
-                    })
-            else:
-                update_job_status(job_id, "completed", {
-                    "result": final_data, 
-                    "new_score": new_score,
-                    "verified": False,
-                    "message": f"Transaction could not be verified"
-                    })
+            update_job_status(job_id, "completed", {
+                "result": final_data,
+                "message": f"AI processing complete. Please review and confirm."
+            })
         else:
             update_job_status(job_id, "failed", {"error": "AI parsing failed"})
 
@@ -128,16 +111,14 @@ async def check_status(job_id: str):
     return status
 
 @router.post("/confirm-transaction")
-async def confirm_tx(user_id: str, data: VoiceTransaction):
+async def confirm_tx(user_id: str, data: VoiceTransaction, current_user: dict = Depends(get_current_user)):
     data = data.model_dump()
     # This is where the data is FINALLY saved to Neo4j
     new_score = graph_service.log_transaction(user_id, data)
     is_verified = graph_service.verify_transaction(user_id, data['amount'])
 
     if is_verified:
-        history = graph_service._get_user_history(user_id)
-        new_score = graph_service.calculate_decayed_score(history)
-        graph_service._update_user_score(user_id, new_score)
+        new_score = graph_service.recalculate_user_score(user_id)
 
     return {
         "status": "success", 
