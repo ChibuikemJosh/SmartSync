@@ -1,45 +1,33 @@
-"""
-Health Check Routes
-Basic health and status endpoints
-"""
-
 from fastapi import APIRouter
-import logging
-
-logger = logging.getLogger(__name__)
+from services.database import GraphService # Assuming your db class is here
+import time
 
 router = APIRouter()
+db = GraphService()
 
-
-@router.get("/health")
+@router.get("/")
 async def health_check():
-    """
-    Health check endpoint
-            
-    Returns:
-    Health status
-    """
+    """Checks if the API and Database are responsive"""
+    start_time = time.time()
+    
+    db_status = "Healthy"
+    try:
+        # Run a tiny query to see if Neo4j is up
+        with db.driver.session() as session:
+            session.run("RETURN 1")
+    except Exception as e:
+        db_status = f"Unhealthy: {str(e)}"
+    
+    latency = round((time.time() - start_time) * 1000, 2)
+    
     return {
-        "status": "healthy",
-        "service": "SmartSync Backend",
-        "version": "1.0.0"
+        "status": "active",
+        "timestamp": time.time(),
+        "latency_ms": latency,
+        "database": db_status,
+        "environment": "Development/Hackathon"
     }
-                                                            
-                                                            
-    @router.get("/ready")
-    async def readiness_check():
-        """
-        Readiness check endpoint
-                                                                        
-        Returns:
-        Readiness status
-        """
-        # TODO: Add database and external service checks
-        return {
-            "ready": True,
-            "services": {
-                "database": "connected",
-                "squad_api": "configured",
-                "ai_services": "ready"
-            }
-        }
+
+@router.get("/version")
+async def get_version():
+    return {"version": "2.0.0", "codename": "Eagle Eye"}
