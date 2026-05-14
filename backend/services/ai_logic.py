@@ -107,13 +107,13 @@ Identify the unit of measurement. Common Nigerian units include:
 
 EXAMPLES:
 User: "I sell one paint of garri for 3500"
-Expected JSON: {{"item": "garri", "amount": 3500, "quantity": 1, "unit": "paint", "type": "SALE", "notes": ""}}
+Expected JSON: {{"item": "garri", "amount": 3500.00, "quantity": 1, "unit": "paint", "type": "SALE", "notes": ""}}
 
 User: "Buy two derica of rice 2400 naira"
-Expected JSON: {{"item": "rice", "amount": 2400, "quantity": 2, "unit": "derica", "type": "EXPENSE", "notes": ""}}
+Expected JSON: {{"item": "rice", "amount": 2400.00, "quantity": 2, "unit": "derica", "type": "EXPENSE", "notes": ""}}
 
 User: "I sell 5 bag of sachet water"
-Expected JSON: {{"item": "sachet water", "amount": 1000, "quantity": 5, "unit": "bag", "type": "SALE", "notes": ""}}
+Expected JSON: {{"item": "sachet water", "amount": 1000.00, "quantity": 5, "unit": "bag", "type": "SALE", "notes": ""}}
 
 PIDGIN CONTEXT EXAMPLES:
 - "I don sell market" -> SALE
@@ -133,7 +133,7 @@ INSTRUCTIONS:
 - Default quantity to 1 if the speaker does not mention one.
 
 Return ONLY JSON in this format:
-{{"item": str, "amount": int, "quantity": int, "unit": str, "type": "SALE" | "EXPENSE", "notes": str}}
+{{"item": str, "amount": float, "quantity": int, "unit": str, "type": "SALE" | "EXPENSE", "notes": str}}
 """
 
     client = _get_client()

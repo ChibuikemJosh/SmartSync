@@ -103,7 +103,7 @@ class GraphService:
             # 4. Save the new score back to the User node
             session.execute_write(self._update_user_score, user_id, new_score)
             
-            return new_score
+            return self.recalculate_user_score(user_id) # Return the updated score for frontend display 
         
     @staticmethod
     def _create_tx_node_only(tx, user_id, data):
@@ -188,6 +188,10 @@ class GraphService:
         result = tx.run(query, user_id=user_id)
         return [record.data() for record in result]
     
+    def get_history(self, user_id):
+        with self.driver.session() as session:
+            return session.execute_read(self._get_user_history, user_id)
+
     @staticmethod
     def _update_user_score(tx, user_id, score):
         tx.run("MATCH (u:User {id: $user_id}) SET u.trust_score = $score", 
@@ -232,7 +236,26 @@ class GraphService:
             SET u.virtual_account = $acc, u.bank_name = $bank
             """
             session.run(query, user_id=user_id, acc=account_number, bank=bank_name)
+
+    def recalculate_user_score(self, user_id):
+        """Recalculates the user's score based on all their transactions."""
+        with self.driver.session() as session:
+            history = session.execute_read(self._get_user_history, user_id)
+            new_score = self.calculate_decayed_score(history)
+            session.execute_write(self._update_user_score, user_id, new_score)
+            return new_score
     
+    def get_user_by_email(self, email: str):
+        """Fetches a user and their hashed password for authentication"""
+        with self.driver.session() as session:
+            query = """
+            MATCH (u:User {email: $email})
+            RETURN u.id as id, u.name as name, u.password as password, 
+                   u.role as role, u.trust_score as trust_score
+            """
+            result = session.run(query, email=email).single()
+            return result.data() if result else None
+
     def get_user_dashboard(self, user_id):
         with self.driver.session() as session:
             query = """

@@ -1,14 +1,14 @@
 """
 Pydantic models for validation and documentation
 """
-
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Any, Dict
+import re
 
 
 class VoiceTransaction(BaseModel):
     item: str = Field(..., description="The name of the item sold or expense incurred")
-    amount: int = Field(..., gt=0, description="The cost in Naira (must be positive)")
+    amount: float = Field(..., gt=0, description="The cost in Naira (must be positive)")
     quantity: int = Field(default=1)
     unit: str = Field(default="item", description="The unit of the item (e.g., 'kg', 'piece', bag, derica, paint, kg)")
     type: str = Field(..., pattern="^(SALE|EXPENSE|CREDIT|DEBIT|GIG_COMPLETE|GIG_CONFIRMED)$")
@@ -73,7 +73,7 @@ class UserCreate(BaseModel):
     name: str
     email: str # Added email
     password: str # Added password
-    role: str # Trader/Worker
+    role: str = Field(..., pattern="^(Trader|Worker|Both)$")
     location: LocationSchema
 
 
@@ -109,6 +109,14 @@ class VirtualAccountRequest(BaseModel):
     last_name: Optional[str] = None
     email: str
     phone: str
+
+    @validator('phone')
+    def validate_nigerian_phone(cls, v):
+        # Basic regex for Nigerian phone numbers (starts with +234 or 0, followed by 10 digits)
+        pattern = r'^(\+234|0)[789][01]\d{8}$'
+        if not re.match(pattern, v):
+            raise ValueError('Invalid Nigerian phone number format')
+        return v
 
 
 class VirtualAccountResponse(BaseModel):
