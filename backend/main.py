@@ -8,6 +8,7 @@ from routes.squad import router as squad_router
 #from routes.ai import router as ai_router
 from routes.health import router as health_router
 import uvicorn
+from services.database import GraphService
 
 # Import your routes
 from routes import ai, auth, chat, health, squad, transactions

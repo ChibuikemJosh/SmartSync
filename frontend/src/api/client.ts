@@ -5,6 +5,7 @@
 
 import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
 import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 
 // Get API URL from environment or use default
 const API_URL = process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiUrl || 'http://localhost:8000/api';
@@ -26,12 +27,16 @@ const client: AxiosInstance = axios.create({
  * Add authentication token if available
  */
 client.interceptors.request.use(
-  (config) => {
-    // TODO: Add bearer token from AsyncStorage if authenticated
-    // const token = await AsyncStorage.getItem('auth_token');
-    // if (token) {
-    //   config.headers.Authorization = `Bearer ${token}`;
-    // }
+  async (config) => {
+    try {
+      const token = await SecureStore.getItemAsync('auth_token');
+      if (token) {
+        if (!config.headers) config.headers = {};
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (e) {
+      // ignore
+    }
     return config;
   },
   (error: AxiosError) => {

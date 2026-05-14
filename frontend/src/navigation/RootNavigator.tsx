@@ -3,17 +3,23 @@
  * Setup for React Navigation with Stack and BottomTab navigators
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
+import { ActivityIndicator, View } from 'react-native';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 
 // Screens
 import DashboardScreen from '../screens/Dashboard';
 import VoiceERPScreen from '../screens/VoiceERP';
 import CaptureOCRScreen from '../screens/CaptureOCR';
 import SquadPayScreen from '../screens/SquadPay';
+import ChatScreen from '../screens/ChatScreen';
+import AuthScreen from '../screens/AuthScreen';
+import ProfileScreen from '../screens/ProfileScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -162,6 +168,16 @@ const BottomTabNavigator: React.FC = () => {
           title: 'Payments',
         }}
       />
+      <Tab.Screen
+        name="Chat"
+        component={ChatScreen}
+        options={{ title: 'Advisor' }}
+      />
+      <Tab.Screen
+        name="Profile"
+        component={ProfileScreen}
+        options={{ title: 'Profile' }}
+      />
     </Tab.Navigator>
   );
 };
@@ -169,11 +185,25 @@ const BottomTabNavigator: React.FC = () => {
 /**
  * Root Navigator - Main app entry point
  */
-export const RootNavigator: React.FC = () => {
+export const RootNavigatorInner: React.FC = () => {
+  const { authenticated } = useAuth();
+
   return (
     <NavigationContainer>
-      <BottomTabNavigator />
+      {authenticated ? <BottomTabNavigator /> : (
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Auth" component={AuthScreen} />
+        </Stack.Navigator>
+      )}
     </NavigationContainer>
+  );
+};
+
+export const RootNavigator: React.FC = () => {
+  return (
+    <AuthProvider>
+      <RootNavigatorInner />
+    </AuthProvider>
   );
 };
 

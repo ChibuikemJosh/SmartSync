@@ -3,7 +3,7 @@ import os
 # Add the current directory to path so it can find services
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from services.database import GraphService
+from database import GraphService
 import uuid
 
 def test_connection():

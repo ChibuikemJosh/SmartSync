@@ -1,81 +1,69 @@
+from services.database import GraphService
+from services.auth_logic import hash_password
 import uuid
 from datetime import datetime, timedelta, timezone
-from services.database import GraphService
 
-db = GraphService()
+def seed_everything():
+    db = GraphService()
+    print("🌱 Seeding database with demo data...")
 
-MOCK_USER = {
-    "id": "mock_trader_001",
-    "name": "Bolaji Test",
-    "role": "Trader",
-    "location": {"city": "Lagos", "state": "Lagos", "country": "Nigeria"},
-    "skills": ["Wholesale", "Logistics"]
-}
+    # Clear existing data (OPTIONAL - use with caution!)
+    # with db.driver.session() as session:
+    #     session.run("MATCH (n) DETACH DELETE n")
 
-def seed_database():
-    print("🚀 Starting Mock Data Injection...")
-    
-    # 1. Create the User
-    db.create_user_node(MOCK_USER)
-    
-    # 2. Generate a mix of transactions
-    # We'll create some old ones to test the "Decay" logic
-    transactions = [
-        # Normal sales from 2 weeks ago (should have decayed slightly)
-        {"item": "rice", "amount": 1200, "quantity": 1, "unit": "derica", "type": "SALE", "days_ago": 20, "verified": True},
-        {"item": "eggs", "amount": 4500, "quantity": 1, "unit": "crate", "type": "SALE", "days_ago": 15, "verified": True},
-        
-        # Recent sales (high impact on score)
-        {"item": "beans", "amount": 1500, "quantity": 1, "unit": "paint", "type": "SALE", "days_ago": 2, "verified": False},
-        
-        # Anomaly/Potential Fraud (Price too high for a derica)
-        {"item": "rice", "amount": 25000, "quantity": 1, "unit": "derica", "type": "SALE", "days_ago": 1, "verified": False},
-        
-        # Expense
-        {"item": "fuel", "amount": 5000, "quantity": 1, "unit": "unit", "type": "EXPENSE", "days_ago": 5, "verified": False},
-
-        {"item": "rice", "amount": 100000, "quantity": 1, "unit": "derica", "type": "SALE", "days_ago": 0, "verified": False}
+    demo_users = [
+        {
+            "id": "user_pro_001",
+            "name": "Alhaji Musa",
+            "email": "musa@market.com",
+            "role": "trader",
+            "score": 85,
+            "city": "Kano"
+        },
+        {
+            "id": "user_new_002",
+            "name": "Blessing Okon",
+            "email": "blessing@market.com",
+            "role": "trader",
+            "score": 43,
+            "city": "Lagos"
+        },
+        {
+            "id": "worker_001",
+            "name": "Sunday Delivery",
+            "email": "sunday@logistic.com",
+            "role": "worker",
+            "score": 70,
+            "city": "Lagos"
+        }
     ]
 
-    for tx in transactions:
-        # Calculate backdated timestamp
-        backdated_time = (datetime.now(timezone.utc) - timedelta(days=tx['days_ago'])).isoformat()
+    for u in demo_users:
+        db.create_user_node({
+            "id": u['id'],
+            "name": u['name'],
+            "email": u['email'],
+            "password": hash_password("password123"),
+            "role": u['role'],
+            "location": {"city": u['city'], "state": u['city'], "country": "Nigeria"},
+            "trust_score": u['score']
+        })
         
-        # We manually inject these to the graph for testing
-        with db.driver.session() as session:
-            query = """
-            MATCH (u:User {id: $user_id})
-            CREATE (t:Transaction {
-                item: $item,
-                amount: $amount,
-                quantity: $quantity,
-                unit: $unit,
-                type: $type,
-                timestamp: $timestamp,
-                verified: $verified
-            })
-            CREATE (u)-[:PERFORMED]->(t)
-            """
-            session.run(query, 
-                user_id=MOCK_USER["id"],
-                item=tx["item"],
-                amount=tx["amount"],
-                quantity=tx["quantity"],
-                unit=tx["unit"],
-                type=tx["type"],
-                timestamp=backdated_time,
-                verified=tx["verified"]
-            )
+        # Add a few transactions for Alhaji Musa so his history looks full
+        if u['id'] == "user_pro_001":
+            for i in range(5):
+                # Backdate transactions slightly
+                ts = (datetime.now(timezone.utc) - timedelta(days=i*2)).isoformat()
+                db.log_transaction(u['id'], {
+                    "item": f"Wholesale Supply {i+1}",
+                    "amount": 150000 + (i * 10000),
+                    "type": "SALE",
+                    "verified": True,
+                    "timestamp": ts
+                })
 
-    with db.driver.session() as session:
-        history = session.execute_read(db._get_user_history, MOCK_USER["id"])
-        new_score = db.calculate_decayed_score(history)
-        session.execute_write(db._update_user_score, MOCK_USER["id"], new_score)
-
-    print(f"✅ Seeding Complete. Bolaji's Trust Score: {new_score}")
+    print("✅ Seeding complete! Login with password: password123")
+    db.close()
 
 if __name__ == "__main__":
-    try:
-        seed_database()
-    finally:
-        db.close()
+    seed_everything()
