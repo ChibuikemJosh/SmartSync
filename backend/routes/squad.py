@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 load_dotenv()  # ← FIRST, before anything else
 # After load_dotenv(), add this safety check
 import os
+
+# ─── Squad Config ────────────────────────────────────────────
 SQUAD_SECRET_KEY = os.getenv("SQUAD_SECRET_KEY")
 SQUAD_BASE_URL = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com")
 
@@ -33,10 +35,6 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# ─── Squad Config ────────────────────────────────────────────
-SQUAD_SECRET_KEY = os.getenv("SQUAD_SECRET_KEY")
-SQUAD_BASE_URL = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com")
 
 def get_headers():
     key = os.getenv("SQUAD_SECRET_KEY")
@@ -136,6 +134,13 @@ async def create_virtual_account(request: VirtualAccountRequest):
 
         account_data = data.get("data", {})
 
+        if graph:
+            graph.update_user_virtual_account(
+                user_id=request.merchant_id, 
+                account_number=account_data.get("virtual_account_number"),
+                bank_name=account_data.get("bank_code") # Or bank name if available
+            )
+
         return {
             "status": "success",
             "account_number": account_data.get("virtual_account_number"),
@@ -188,6 +193,7 @@ async def squad_webhook(request: Request):
 
             logger.info(f"Payment: ₦{amount_naira} for user {merchant_id}")
 
+<<<<<<< HEAD
             try:
                 if graph:
                     new_score = graph.log_transaction(
@@ -207,6 +213,26 @@ async def squad_webhook(request: Request):
                     matched = None
             except Exception as db_error:
                 logger.warning(f"Neo4j unavailable: {db_error} — returning base score")
+=======
+            # Step 2 — Check if this payment matches a voice log
+            # If it does, verify that voice log (jumps from 3pts to 15pts)
+            if graph:
+                new_score = graph.log_transaction(
+                    user_id=merchant_id,
+                    tx_data={
+                        "item": "Squad Payment",
+                        "amount": amount_naira,
+                        "quantity": 1,
+                        "unit": "payment",
+                        "type": "CREDIT",
+                    }
+                )
+                matched = graph.verify_transaction(
+                    user_id=merchant_id,
+                    amount=amount_naira
+                )
+            else:
+>>>>>>> 80e9003241b1f637b6300bd87ac335b0ed34674f
                 new_score = 43
                 matched = None
 
@@ -670,6 +696,8 @@ async def release_escrow(gig_id: str):
                 tx_data={
                     "item": f"Gig completed - {gig_id}",
                     "amount": amount,
+                    "quantity": 1,
+                    "unit": "gig"
                     "type": "GIG_COMPLETE"
                 }
             )
@@ -678,6 +706,8 @@ async def release_escrow(gig_id: str):
                 tx_data={
                     "item": f"Gig confirmed - {gig_id}",
                     "amount": amount,
+                    "quantity": 1,
+                    "unit": "gig"
                     "type": "GIG_CONFIRMED"
                 }
             )
