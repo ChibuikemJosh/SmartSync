@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 load_dotenv()  # ← FIRST, before anything else
 # After load_dotenv(), add this safety check
 import os
+
+# ─── Squad Config ────────────────────────────────────────────
 SQUAD_SECRET_KEY = os.getenv("SQUAD_SECRET_KEY")
 SQUAD_BASE_URL = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com")
 
@@ -33,10 +35,6 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# ─── Squad Config ────────────────────────────────────────────
-SQUAD_SECRET_KEY = os.getenv("SQUAD_SECRET_KEY")
-SQUAD_BASE_URL = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com")
 
 def get_headers():
     key = os.getenv("SQUAD_SECRET_KEY")
@@ -135,6 +133,13 @@ async def create_virtual_account(request: VirtualAccountRequest):
             )
 
         account_data = data.get("data", {})
+
+        if graph:
+            graph.update_user_virtual_account(
+                user_id=request.merchant_id, 
+                account_number=account_data.get("virtual_account_number"),
+                bank_name=account_data.get("bank_code") # Or bank name if available
+            )
 
         return {
             "status": "success",
@@ -243,6 +248,8 @@ async def squad_webhook(request: Request):
                     tx_data={
                         "item": "Squad Payment",
                         "amount": amount_naira,
+                        "quantity": 1,
+                        "unit": "payment",
                         "type": "CREDIT",
                     }
                 )
@@ -381,6 +388,8 @@ async def release_escrow(gig_id: str):
                 tx_data={
                     "item": f"Gig completed - {gig_id}",
                     "amount": amount,
+                    "quantity": 1,
+                    "unit": "gig"
                     "type": "GIG_COMPLETE"
                 }
             )
@@ -389,6 +398,8 @@ async def release_escrow(gig_id: str):
                 tx_data={
                     "item": f"Gig confirmed - {gig_id}",
                     "amount": amount,
+                    "quantity": 1,
+                    "unit": "gig"
                     "type": "GIG_CONFIRMED"
                 }
             )
