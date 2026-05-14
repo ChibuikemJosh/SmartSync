@@ -53,7 +53,10 @@ async def run_ai_pipeline(job_id: str, user_id: str, tmp_path: str):
 
 async def run_ocr_pipeline(job_id: str, user_id: str, tmp_path: str):
     try:
-        final_data = process_ledger_image(tmp_path)
+        with open(tmp_path, "rb") as f:
+            file_bytes = f.read()
+
+        final_data = process_ledger_image(file_bytes)
 
         if final_data:
             new_score = graph_service.log_transaction(user_id, final_data)

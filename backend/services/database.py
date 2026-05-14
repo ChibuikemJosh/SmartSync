@@ -325,6 +325,44 @@ class GraphService:
             )
             return result.single()
 
+    def check_if_verified(self, tx_id: str) -> bool:
+        """Checks if a specific transaction is already marked as verified."""
+        with self.driver.session() as session:
+            query = """
+            MATCH (t:Transaction {id: $tx_id})
+            RETURN t.verified as verified
+            """
+            result = session.run(query, tx_id=tx_id).single()
+            if result:
+                # result['verified'] might be None or False, return explicit bool
+                return bool(result.get('verified'))
+            return False
+        
+    def update_transaction_node(self, tx_id: str, data: dict):
+        """Updates an unverified transaction's details."""
+        with self.driver.session() as session:
+            query = """
+            MATCH (t:Transaction {id: $tx_id})
+            SET t.item = $item,
+                t.amount = $amount,
+                t.quantity = $quantity,
+                t.unit = $unit,
+                t.type = $type,
+                t.notes = $notes,
+                t.updated_at = $updated_at
+            RETURN t.id
+            """
+            session.run(query,
+                tx_id=tx_id,
+                item=data.get('item'),
+                amount=data.get('amount'),
+                quantity=data.get('quantity'),
+                unit=data.get('unit'),
+                type=data.get('type'),
+                notes=data.get('notes'),
+                updated_at=datetime.now(timezone.utc).isoformat()
+            )
+
     def check_price_anomaly(self, item, unit, amount, quantity):
         price_per_unit = amount / quantity
         with self.driver.session() as session:

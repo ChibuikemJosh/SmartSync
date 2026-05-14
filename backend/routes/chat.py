@@ -1,13 +1,15 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, logger, Depends
 from services.ai_logic import transcribe_audio, _get_client
 from services.database import GraphService
+from utils.dependencies import get_current_user
 import json
 
 router = APIRouter()
 db = GraphService()
 
 @router.post("/chat")
-async def chat_with_records(user_id: str, message: str = None, voice_path: str = None):
+async def chat_with_records(message: str = None, voice_path: str = None, current_user: dict = Depends(get_current_user)):
+    user_id = current_user['id']
     # 1. If it's voice, transcribe it first
     user_query = message
     if voice_path:
@@ -18,10 +20,14 @@ async def chat_with_records(user_id: str, message: str = None, voice_path: str =
 
     # 2. Use Groq to turn the question into a Neo4j Cypher query
     cypher_query = generate_cypher(user_query, user_id)
+    cypher_query = cypher_query.replace("```cypher", "").replace("```", "").strip()
     
-    # 3. Run the query on Neo4j
-    with db.driver.session() as session:
-        result = session.run(cypher_query).data()
+    try:# 3. Run the query on Neo4j
+        with db.driver.session() as session:
+            result = session.run(cypher_query).data()
+    except Exception as e:
+        logger.error(f"Cypher Error: {e}")
+        result = [] # Return empty list so summarize_results can handle it
     
     # 4. Use Groq to explain the result to the user
     answer = summarize_results(user_query, result)
