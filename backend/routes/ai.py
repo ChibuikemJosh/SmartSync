@@ -111,7 +111,8 @@ async def check_status(job_id: str):
     return status
 
 @router.post("/confirm-transaction")
-async def confirm_tx(user_id: str, data: VoiceTransaction, current_user: dict = Depends(get_current_user)):
+async def confirm_tx(data: VoiceTransaction, current_user: dict = Depends(get_current_user)):
+    user_id = current_user['id']
     data = data.model_dump()
     # This is where the data is FINALLY saved to Neo4j
     new_score = graph_service.log_transaction(user_id, data)
