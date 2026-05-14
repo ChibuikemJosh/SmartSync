@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any as any, cast, Dict
+from typing import Optional, Any, cast, Dict
 from dotenv import load_dotenv
 
 from pydantic import ValidationError
@@ -11,6 +11,9 @@ import redis
 from models.schemas import VoiceTransaction
 
 
+http_client = httpx.Client()
+
+
 load_dotenv()
 
 
@@ -19,32 +22,38 @@ load_dotenv()
 r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
 
-def update_job_status(job_id: str, status: str, data: any = None):
+def update_job_status(job_id: str, status: str, data: Optional[Any] = None):
     """Helper to update job status in Redis"""
     job_key = f"job:{job_id}"
     r.hset(job_key, mapping={"status": status, "data": json.dumps(data) if data else ""})
     # Set a TTL of 1 hour for cleanup
     r.expire(job_key, 3600)
 
-def get_job_status(job_id: str):
+
+def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:
     """
     Fetches job data from Redis and parses the JSON string back into a Python object.
     """
     job_key = f"job:{job_id}"
     job = r.hgetall(job_key)
     # Cast to a concrete dict type for static/type checkers (some redis clients may be awaitable)
-    job = cast(Dict[str, str], job)
 
     if not job:
         return None
 
-    # Convert the JSON string back into a Python dictionary/list
-    if job.get("data"):
+    # Use Any for values because we will replace the "data" string with a parsed object
+    job = cast(Dict[str, Any], job)
+    data_str = job.get("data", "") or ""
+    if data_str:
         try:
-            job["data"] = json.loads(job["data"])
+            parsed = json.loads(data_str)
         except json.JSONDecodeError:
-            pass 
-            
+            parsed = {}  # Default to empty dict if parsing fails
+    else:
+        parsed = {}
+
+    job["data"] = parsed
+
     return job
 
 
@@ -53,7 +62,6 @@ def _get_client() -> Groq:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not set")
     # Pass an explicit httpx client to avoid incompatible kwargs
-    http_client = httpx.Client()
     return Groq(api_key=api_key, http_client=http_client)
 
 
@@ -85,26 +93,47 @@ def parse_voice_to_json(transcription_text):
     """Turn informal market talk into structured transaction data."""
     prompt = f"""
 You are an expert Nigerian Market Bookkeeper for the SmartSync platform.
-Your goal is to turn informal market talk into structured financial data.
+Your goal is to turn informal market talk (Either English or Nigerian Pidgin) into structured financial data.
+
+STRICT UNIT CATEGORIZATION:
+Identify the unit of measurement. Common Nigerian units include:
+- "Bag" (e.g., 50kg bag, small bag)
+- "Derica" (Common for rice, beans, garri)
+- "Paint" (Paint bucket/rubber)
+- "Crate" (For eggs)
+- "Kilo/KG" (For meat/frozen foods)
+- "Piece/Unit" (For single items like bread, phone chargers)
+- "Carton" (For noodles, drinks)
 
 EXAMPLES:
-User: "I just sold four crates of eggs for 12,000 naira to Mama Ngozi."
-Expected JSON: {{"item": "eggs", "amount": 12000, "quantity": 4, "type": "SALE", "notes": "Customer: Mama Ngozi"}}
+User: "I sell one paint of garri for 3500"
+Expected JSON: {{"item": "garri", "amount": 3500.00, "quantity": 1, "unit": "paint", "type": "SALE", "notes": ""}}
 
-User: "I spent 5k on transport for the delivery today."
-Expected JSON: {{"item": "transport", "amount": 5000, "quantity": 1, "type": "EXPENSE", "notes": "Delivery"}}
+User: "Buy two derica of rice 2400 naira"
+Expected JSON: {{"item": "rice", "amount": 2400.00, "quantity": 2, "unit": "derica", "type": "EXPENSE", "notes": ""}}
+
+User: "I sell 5 bag of sachet water"
+Expected JSON: {{"item": "sachet water", "amount": 1000.00, "quantity": 5, "unit": "bag", "type": "SALE", "notes": ""}}
+
+PIDGIN CONTEXT EXAMPLES:
+- "I don sell market" -> SALE
+- "I buy market" -> EXPENSE
+- "Customer neva pay" -> SALE (but mark notes as 'Pending')
+- "Waybill money" -> EXPENSE (item: 'Delivery/Waybill')
+- "Dash" -> EXPENSE (item: 'Gift/Discount')
 
 INPUT TO PROCESS:
 "{transcription_text}"
 
 INSTRUCTIONS:
 - Return ONLY valid JSON.
+- if the unit is not mentioned, default to "item".
 - If the user uses 'k', convert it to thousands (e.g., 5k = 5000).
 - Categorize as SALE or EXPENSE.
 - Default quantity to 1 if the speaker does not mention one.
 
 Return ONLY JSON in this format:
-{{"item": str, "amount": int, "quantity": int, "type": "SALE" | "EXPENSE", "notes": str}}
+{{"item": str, "amount": float, "quantity": int, "unit": str, "type": "SALE" | "EXPENSE", "notes": str}}
 """
 
     client = _get_client()

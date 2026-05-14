@@ -9,15 +9,15 @@ from fastapi import UploadFile, HTTPException
 
 async def save_temp_file(file: UploadFile) -> str:
     """
-    Validates the audio extension and saves the upload to a persistent 
+    Validates the file extension and saves the upload to a persistent 
     temporary file for the background worker to use.
     """
     # 1. Validate extension
     filename = file.filename or ""
-    allowed_extensions = ('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')
+    allowed_extensions = ('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
     
     if not filename.lower().endswith(allowed_extensions):
-        raise HTTPException(status_code=400, detail="Invalid audio format")
+        raise HTTPException(status_code=400, detail="Invalid file format")
     
     # 2. Get the extension (suffix)
     suffix = os.path.splitext(filename)[1]
