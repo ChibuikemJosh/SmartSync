@@ -25,6 +25,7 @@ import hashlib
 import json
 import time
 from services.database import GraphService
+from models.schemas import VirtualAccountRequest, VirtualAccountResponse, PaymentLinkRequest, PaymentLinkResponse, EscrowRequest, WithdrawalRequest
 
 try:
     graph = GraphService()
@@ -36,6 +37,12 @@ except Exception as e:
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+SQUAD_TEST_BVN = "22172180083"
+SQUAD_TEST_DOB = "01/01/1990"
+SQUAD_TEST_ADDRESS = "Lagos, Nigeria"
+SQUAD_TEST_GENDER = "1"
+SQUAD_TEST_BENEFICIARY_ACCOUNT = "0123456789"
+
 def get_headers():
     key = os.getenv("SQUAD_SECRET_KEY")
     return {
@@ -43,52 +50,7 @@ def get_headers():
         "Content-Type": "application/json"
     }
 
-# ─── Request / Response Models ───────────────────────────────
-
-class VirtualAccountRequest(BaseModel):
-    merchant_id: str
-    business_name: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    email: str
-    phone: str
-
-class VirtualAccountResponse(BaseModel):
-    status: str
-    account_number: str
-    bank_name: str
-    merchant_id: str
-    business_name: str
-
-class PaymentLinkRequest(BaseModel):
-    merchant_id: str
-    amount: float
-    transaction_id: str
-    description: str
-    customer_email: Optional[str] = None
-
-class PaymentLinkResponse(BaseModel):
-    status: str
-    payment_link: str
-    transaction_id: str
-    amount: float
-
-class EscrowRequest(BaseModel):
-    gig_id: str
-    trader_id: str
-    worker_id: str
-    amount: float
-
-class WithdrawalRequest(BaseModel):
-    user_id: str
-    amount: int          # in Naira
-    bank_code: str
-    account_number: str
-    narration: Optional[str] = "SmartSync withdrawal"
-
-
 # ─── 1. CREATE VIRTUAL ACCOUNT ───────────────────────────────
-
 @router.post("/create-virtual-account")
 async def create_virtual_account(request: VirtualAccountRequest):
 
@@ -98,12 +60,12 @@ async def create_virtual_account(request: VirtualAccountRequest):
     "last_name": request.last_name or request.business_name.split()[-1],
     "mobile_num": f"234{request.phone[-10:]}",
     "email": request.email,
-    "bvn": "22172180083",
-    "dob": "01/01/1990",
-    "address": "Lagos, Nigeria",
-    "gender": "1",
+    "bvn": SQUAD_TEST_BVN,
+    "dob": SQUAD_TEST_DOB,
+    "address": SQUAD_TEST_ADDRESS,
+    "gender": SQUAD_TEST_GENDER,
     "customer_identifier": request.merchant_id,
-    "beneficiary_account": "0123456789"
+    "beneficiary_account": SQUAD_TEST_BENEFICIARY_ACCOUNT,
 }
 
         logger.info(f"Squad payload: {payload}")
@@ -177,7 +139,7 @@ async def generate_payment_link(request: PaymentLinkRequest):
                     "hash": request.transaction_id,
                     "amount": int(request.amount * 100),
                     "description": request.description,
-                    "redirect_link": "...",
+                    "redirect_link": "https://smartsync.vercel.app/payment-success",
                     "support_email": request.customer_email or "support@smartsync.app"
                 }
             )
@@ -248,9 +210,8 @@ async def squad_webhook(request: Request):
                     tx_data={
                         "item": "Squad Payment",
                         "amount": amount_naira,
-                        "quantity": 1,
-                        "unit": "payment",
                         "type": "CREDIT",
+                        "verified": "true"
                     }
                 )
                 matched = graph.verify_transaction(
@@ -262,6 +223,7 @@ async def squad_webhook(request: Request):
                 matched = None
 
             if matched:
+                new_score = graph.recalculate_user_score(merchant_id)
                 # Recalculate score again now that a transaction is verified
                 logger.info(f"Voice log verified for user {merchant_id} — score boosted")
 
@@ -328,14 +290,12 @@ async def lock_escrow(request: EscrowRequest):
         logger.info(f"Locking escrow for gig {request.gig_id}: ₦{request.amount}")
 
         # ── Save escrow record in database ──
-        # from services.database import create_escrow
-        # create_escrow(
-        #     gig_id=request.gig_id,
-        #     trader_id=request.trader_id,
-        #     worker_id=request.worker_id,
-        #     amount=request.amount,
-        #     status="locked"
-        # )
+        graph.create_escrow(
+            gig_id=request.gig_id,
+            trader_id=request.trader_id,
+            worker_id=request.worker_id,
+            amount=request.amount
+        )
 
         return {
             "status": "success",
@@ -355,12 +315,19 @@ async def release_escrow(gig_id: str):
     try:
         logger.info(f"Releasing escrow for gig {gig_id}")
 
-        # TODO: Get real gig details from database once gig model exists
-        # For now these are placeholders — replace when Neo4j gig nodes are ready
-        worker_account = "0123456789"
-        worker_id = "worker_placeholder_id"
-        trader_id = "trader_placeholder_id"
-        amount = 5000
+        gig = graph.get_gig_details(gig_id)
+        if not gig:
+            raise HTTPException(status_code=404, detail="Gig record not found")
+
+        # 2. Safety Check: Don't pay twice!
+        if gig['status'] == 'released':
+            raise HTTPException(status_code=400, detail="Funds for this gig have already been released")
+
+        worker_id = gig["worker_id"]
+        trader_id = gig["trader_id"]
+        amount = gig["amount"]
+        bank_code = gig["bank_code"]
+        worker_account = gig["account_number"]
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -369,12 +336,18 @@ async def release_escrow(gig_id: str):
                 json={
                     "transaction_reference": f"escrow_release_{gig_id}_{int(time.time())}",
                     "amount": amount * 100,
-                    "bank_code": "000013",
+                    "bank_code": bank_code,
                     "account_number": worker_account,
                     "currency_id": "NGN",
                     "remark": f"SmartSync gig payment - {gig_id}"
                 }
             )
+
+        if response.status_code != 200:
+            logger.error(f"Squad payout error: {response.text}")
+            raise HTTPException(status_code=400, detail="Failed to release escrow funds")
+            
+        graph.release_escrow_status(gig_id)
 
         data = response.json()
 
@@ -388,8 +361,6 @@ async def release_escrow(gig_id: str):
                 tx_data={
                     "item": f"Gig completed - {gig_id}",
                     "amount": amount,
-                    "quantity": 1,
-                    "unit": "gig"
                     "type": "GIG_COMPLETE"
                 }
             )
@@ -398,8 +369,6 @@ async def release_escrow(gig_id: str):
                 tx_data={
                     "item": f"Gig confirmed - {gig_id}",
                     "amount": amount,
-                    "quantity": 1,
-                    "unit": "gig"
                     "type": "GIG_CONFIRMED"
                 }
             )
@@ -414,6 +383,35 @@ async def release_escrow(gig_id: str):
     except Exception as e:
         logger.error(f"Escrow release error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to release escrow")
+
+
+@router.post("/escrow/cancel/{gig_id}")
+async def cancel_gig(gig_id: str, initiator: str = "trader", reason: str = "Change of mind"):
+    """
+    initiator can be 'trader' or 'worker'
+    """
+    gig = graph.get_gig_details(gig_id)
+    if not gig or gig['status'] != 'locked':
+        raise HTTPException(status_code=400, detail="Invalid gig status for cancellation")
+
+    graph.refund_escrow_status(gig_id, canceled_by=initiator)
+
+    # 3. FAIR TRUST SCORE LOGIC
+    if initiator == "worker":
+        # Worker ghosted the trader -> Penalty for Worker
+        graph.log_transaction(gig['worker_id'], tx_data={
+            "item": f"Gig No-show: {reason}",
+            "type": "PENALTY" 
+        })
+    else:
+        # Trader canceled before start -> No penalty for worker
+        # Maybe a tiny penalty for trader if they do this too often
+        graph.log_transaction(gig['trader_id'], tx_data={
+            "item": f"Trader Cancelled: {reason}",
+            "type": "SYSTEM_NOTE" 
+        })
+
+    return {"status": "success", "message": f"Gig canceled by {initiator}. Funds returned."}
 
 
 # ─── 7. WITHDRAWAL — User Sends Money to Their Bank ─────────

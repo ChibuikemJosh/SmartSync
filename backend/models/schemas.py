@@ -11,7 +11,7 @@ class VoiceTransaction(BaseModel):
     amount: int = Field(..., gt=0, description="The cost in Naira (must be positive)")
     quantity: int = Field(default=1)
     unit: str = Field(default="item", description="The unit of the item (e.g., 'kg', 'piece', bag, derica, paint, kg)")
-    type: str = Field(..., pattern="^(SALE|EXPENSE)$")
+    type: str = Field(..., pattern="^(SALE|EXPENSE|CREDIT|DEBIT|GIG_COMPLETE|GIG_CONFIRMED)$")
     timestamp: Optional[str] = None
     notes: Optional[str] = "No additional notes"
     verified: bool = False # Default to False until verified by Squad
@@ -68,9 +68,19 @@ class TierInfo(BaseModel):
     next_milestone: int
 
 
+class UserCreate(BaseModel):
+    id: str
+    name: str
+    email: str # Added email
+    password: str # Added password
+    role: str # Trader/Worker
+    location: LocationSchema
+
+
 class UserProfile(BaseModel):
     id: str = Field(..., description="Unique ID")
     name: str
+    email: str
     role: str = Field(..., pattern="^(Trader|Worker|Both)$")
     location: LocationSchema
     trust_score: int = 43
@@ -83,8 +93,57 @@ class DashboardResponse(BaseModel):
     recent_transactions: list[VoiceTransaction]
 
 
+# Response and Request models for Squad routes
+
 class ErrorResponse(BaseModel):
     status: str = "error"
     message: str
     code: Optional[int] = None
     details: Optional[Any] = None
+
+
+class VirtualAccountRequest(BaseModel):
+    merchant_id: str
+    business_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: str
+    phone: str
+
+
+class VirtualAccountResponse(BaseModel):
+    status: str
+    account_number: str
+    bank_name: str
+    merchant_id: str
+    business_name: str
+
+
+class PaymentLinkRequest(BaseModel):
+    merchant_id: str
+    amount: float
+    transaction_id: str
+    description: str
+    customer_email: Optional[str] = None
+
+
+class PaymentLinkResponse(BaseModel):
+    status: str
+    payment_link: str
+    transaction_id: str
+    amount: float
+
+
+class EscrowRequest(BaseModel):
+    gig_id: str
+    trader_id: str
+    worker_id: str
+    amount: float
+
+
+class WithdrawalRequest(BaseModel):
+    user_id: str
+    amount: int          # in Naira
+    bank_code: str
+    account_number: str
+    narration: Optional[str] = "SmartSync withdrawal"

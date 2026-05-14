@@ -33,6 +33,8 @@ def seed_database():
         
         # Expense
         {"item": "fuel", "amount": 5000, "quantity": 1, "unit": "unit", "type": "EXPENSE", "days_ago": 5, "verified": False},
+
+        {"item": "rice", "amount": 100000, "quantity": 1, "unit": "derica", "type": "SALE", "days_ago": 0, "verified": False}
     ]
 
     for tx in transactions:

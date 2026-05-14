@@ -129,9 +129,10 @@ async def check_status(job_id: str):
 
 @router.post("/confirm-transaction")
 async def confirm_tx(user_id: str, data: VoiceTransaction):
+    data = data.model_dump()
     # This is where the data is FINALLY saved to Neo4j
-    new_score = graph_service.log_transaction(user_id, data.model_dump())
-    is_verified = graph_service.verify_transaction(user_id, data.amount)
+    new_score = graph_service.log_transaction(user_id, data)
+    is_verified = graph_service.verify_transaction(user_id, data['amount'])
 
     if is_verified:
         history = graph_service._get_user_history(user_id)

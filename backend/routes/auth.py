@@ -18,6 +18,7 @@ async def register_user(user: UserCreate):
         return UserProfile(
             id=user.id,
             name=user.name,
+            email=user.email,
             role=user.role,
             location=user.location,
             trust_score=43,
