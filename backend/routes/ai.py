@@ -2,7 +2,7 @@
 AI Processing Routes
 Handles Voice-to-JSON and OCR (Image-to-JSON) processing
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from typing import Optional, Dict, Any
