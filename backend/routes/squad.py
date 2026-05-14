@@ -15,7 +15,7 @@ SQUAD_BASE_URL = os.getenv("SQUAD_BASE_URL", "https://sandbox-api-d.squadco.com"
 if not SQUAD_SECRET_KEY:
     raise RuntimeError("SQUAD_SECRET_KEY is missing from .env file. Server cannot start.")
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import Optional
 import logging
@@ -26,6 +26,7 @@ import json
 import time
 from services.database import GraphService
 from models.schemas import VirtualAccountRequest, VirtualAccountResponse, PaymentLinkRequest, PaymentLinkResponse, EscrowRequest, WithdrawalRequest
+from utils.dependencies import get_current_user
 
 try:
     graph = GraphService()
@@ -52,7 +53,8 @@ def get_headers():
 
 # ─── 1. CREATE VIRTUAL ACCOUNT ───────────────────────────────
 @router.post("/create-virtual-account")
-async def create_virtual_account(request: VirtualAccountRequest):
+async def create_virtual_account(request: VirtualAccountRequest, current_user: dict = Depends(get_current_user)):
+    logged_in_user_id = current_user['id']
 
     try:
         payload = {
@@ -64,7 +66,7 @@ async def create_virtual_account(request: VirtualAccountRequest):
     "dob": SQUAD_TEST_DOB,
     "address": SQUAD_TEST_ADDRESS,
     "gender": SQUAD_TEST_GENDER,
-    "customer_identifier": request.merchant_id,
+    "customer_identifier": logged_in_user_id,
     "beneficiary_account": SQUAD_TEST_BENEFICIARY_ACCOUNT,
 }
 
@@ -98,7 +100,7 @@ async def create_virtual_account(request: VirtualAccountRequest):
 
         if graph:
             graph.update_user_virtual_account(
-                user_id=request.merchant_id, 
+                user_id=logged_in_user_id, 
                 account_number=account_data.get("virtual_account_number"),
                 bank_name=account_data.get("bank_code") # Or bank name if available
             )
@@ -107,7 +109,7 @@ async def create_virtual_account(request: VirtualAccountRequest):
             "status": "success",
             "account_number": account_data.get("virtual_account_number"),
             "bank_code": account_data.get("bank_code"),
-            "merchant_id": request.merchant_id,
+            "merchant_id": logged_in_user_id,
             "business_name": request.business_name,
             "raw": data
         }
