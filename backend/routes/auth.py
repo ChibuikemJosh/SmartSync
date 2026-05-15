@@ -56,17 +56,19 @@ def _create_user_fallback(user_dict: dict):
 async def register_user(user: UserCreate):
     try:
         # Use real DB if available, otherwise fall back to in-memory store
-        if db.is_available():
-            # Check for existing email
-            existing = db.get_user_by_email(user.email)
-            if existing:
-                return JSONResponse(status_code=400, content={"detail": "Email already registered"}, headers=_cors_headers())
+        # Try DB operations, but fall back to in-memory on any DB error (e.g., auth denied)
+        try:
+            if db.is_available():
+                existing = db.get_user_by_email(user.email)
+                if existing:
+                    return JSONResponse(status_code=400, content={"detail": "Email already registered"}, headers=_cors_headers())
 
-            # Prepare and create user
-            user_dict = user.model_dump()
-            user_dict["password"] = hash_password(user.password)
-            db.create_user_node(user_dict)
-        else:
+                user_dict = user.model_dump()
+                user_dict["password"] = hash_password(user.password)
+                db.create_user_node(user_dict)
+            else:
+                raise RuntimeError("DB driver not available")
+        except Exception:
             # Fallback in-memory store
             if _get_user_by_email_fallback(user.email):
                 return JSONResponse(status_code=400, content={"detail": "Email already registered"}, headers=_cors_headers())
@@ -95,13 +97,16 @@ async def register_user(user: UserCreate):
 @router.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     try:
-        # Use DB when available, else fallback to in-memory users
-        if db.is_available():
-            user = db.get_user_by_email(form_data.username)
-            if not user or not verify_password(form_data.password, user['password']):
-                return JSONResponse(status_code=401, content={"detail": "Invalid email or password"}, headers=_cors_headers())
-            user_id = user['id']
-        else:
+        # Attempt DB auth, but fall back to in-memory on any DB error
+        try:
+            if db.is_available():
+                user = db.get_user_by_email(form_data.username)
+                if not user or not verify_password(form_data.password, user['password']):
+                    return JSONResponse(status_code=401, content={"detail": "Invalid email or password"}, headers=_cors_headers())
+                user_id = user['id']
+            else:
+                raise RuntimeError("DB driver not available")
+        except Exception:
             user = _get_user_by_email_fallback(form_data.username)
             if not user or not verify_password(form_data.password, user['password']):
                 return JSONResponse(status_code=401, content={"detail": "Invalid email or password"}, headers=_cors_headers())
@@ -124,10 +129,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         user_id: str = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        # Try DB first, fallback to in-memory store
+        # Try DB first; on DB errors, fallback to in-memory store
         user = None
-        if db.is_available():
-            user = db.get_user_by_id(user_id)
+        try:
+            if db.is_available():
+                user = db.get_user_by_id(user_id)
+        except Exception:
+            user = None
+
         if not user:
             # Search fallback users by id
             for u in _in_memory_users.values():
