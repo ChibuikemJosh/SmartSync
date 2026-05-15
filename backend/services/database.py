@@ -30,10 +30,24 @@ class GraphService:
             try:
                 self.driver = GraphDatabase.driver(uri, auth=(user, password))
                 try:
-                    self.driver.verify_connectivity()
-                except Exception:
-                    pass
-                break
+                        self.driver.verify_connectivity()
+                    except Exception as e:
+                        logging.warning(f"Neo4j verify_connectivity failed: {e}")
+                        # Treat failed verification as no driver so callers fall back
+                        try:
+                            self.driver.close()
+                        except Exception:
+                            pass
+                        self.driver = None
+                        # continue to next retry attempt
+                        if attempt == max_retries:
+                            logging.error("Could not verify Neo4j connectivity after retries; continuing without DB driver")
+                            break
+                        sleep = base_delay * (2 ** (attempt - 1))
+                        time.sleep(sleep)
+                        continue
+                    # If verify_connectivity succeeded, break out of attempts loop
+                    break
             except Exception as e:
                 logging.warning(f"Attempt {attempt} to connect to Neo4j failed: {e}")
                 self.driver = None
