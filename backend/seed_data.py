@@ -1,92 +1,49 @@
-import sys
 import os
-import uuid
 import logging
-from datetime import datetime, timedelta, timezone
-
-# Ensure the app root is in the python path so it can find 'services'
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
 from services.database import GraphService
-from services.auth_logic import hash_password
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def seed_everything():
-    db = GraphService()
-    print("\n🌱 Seeding SmartSync database with demo data...")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
+# Shared instance
+db = GraphService()
+
+SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if not SECRET_KEY:
+        logger.critical("AUTH_SECRET_KEY missing!")
+        raise HTTPException(status_code=500, detail="Auth configuration error")
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub") or payload.get("id")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    # Robustness Check: Ensure DB is alive
     if not db.is_available():
-        print("❌ ERROR: Neo4j is unavailable, skipping seed data.")
-        return
+        # Try to re-init once if driver died
+        logger.error("DB unavailable in dependency check. Attempting recovery...")
+        db.__init__() 
+        if not db.is_available():
+            raise HTTPException(status_code=503, detail="Database connection lost")
 
-    # Clear existing data (Uncomment if you want a fresh slate every time)
-    # with db._session() as session:
-    #     session.run("MATCH (n) DETACH DELETE n")
-    #     print("🧹 Cleared old database data.")
+    user = db.get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User account not found")
 
-    demo_users = [
-        {
-            "id": "user_pro_001",
-            "name": "Alhaji Musa",
-            "email": "musa@market.com",
-            "role": "Trader",
-            "score": 85,
-            "city": "Kano"
-        },
-        {
-            "id": "user_new_002",
-            "name": "Blessing Okon",
-            "email": "blessing@market.com",
-            "role": "Trader",
-            "score": 43,
-            "city": "Lagos"
-        },
-        {
-            "id": "worker_001",
-            "name": "Sunday Delivery",
-            "email": "sunday@logistic.com",
-            "role": "Worker",
-            "score": 70,
-            "city": "Lagos"
-        }
-    ]
-
-    for u in demo_users:
-        # Create User
-        db.create_user_node({
-            "id": u['id'],
-            "name": u['name'],
-            "email": u['email'],
-            "password": hash_password("password123"),
-            "role": u['role'],
-            "location": {"city": u['city'], "state": u['city'], "country": "Nigeria"},
-            "trust_score": u['score']
-        })
-        print(f"👤 Created user: {u['name']} ({u['role']})")
-
-        # Add a few transactions for Alhaji Musa so his dashboard looks alive
-        if u['id'] == "user_pro_001":
-            print(f"📦 Generating transaction history for {u['name']}...")
-            for i in range(5):
-                # Backdate transactions slightly
-                ts = (datetime.now(timezone.utc) - timedelta(days=i*2)).isoformat()
-                db.log_transaction(u['id'], {
-                    "item": f"Wholesale Supply {i+1}",
-                    "amount": 150000 + (i * 10000),
-                    "quantity": 10 + i,
-                    "unit": "bag",
-                    "type": "SALE",
-                    "verified": True,
-                    "timestamp": ts,
-                    "is_anomaly": False
-                })
-
-    print("\n✅ Seeding complete! You can now log in with:")
-    print("   Email: musa@market.com")
-    print("   Password: password123")
-    db.close()
-
-if __name__ == "__main__":
-    seed_everything()
+    return user
