@@ -2,103 +2,79 @@
 AI Processing Routes
 Handles Voice-to-JSON and OCR (Image-to-JSON) processing
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Depends
-from pydantic import BaseModel
-
-from typing import Optional, Dict, Any
 import logging
-import shutil
-import tempfile
 import os
 import uuid
+from typing import Callable, Any
 
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Depends
+from models.schemas import VoiceTransaction, VoiceProcessResponse, ErrorResponse
 from services.ai_logic import process_voice_entry, update_job_status, get_job_status
 from services.database import GraphService
 from services.ocr_logic import process_ledger_image
-
-from utils.helpers import save_temp_file
 from utils.dependencies import get_current_user
-
-from models.schemas import VoiceTransaction, VoiceProcessResponse, ErrorResponse
-
+from utils.helpers import save_temp_file
 
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/ai", tags=["AI Processing"])
 
-router = APIRouter()
-graph_service = GraphService()
+# Constants
+SUPPORTED_AUDIO = {'.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm'}
+SUPPORTED_IMAGES = {'.jpg', '.jpeg', '.png', '.webp'}
 
+# --- Background Task Wrappers ---
 
-async def run_ai_pipeline(job_id: str, user_id: str, tmp_path: str):
+async def run_pipeline_task(
+    job_id: str, 
+    user_id: str, 
+    tmp_path: str, 
+    processor_func: Callable[[str], Any],
+    service_name: str
+):
+    """Generic background worker to handle AI/OCR logic and cleanup."""
     try:
-        final_data = process_voice_entry(tmp_path)
+        # If it's OCR, we might need bytes; for voice, usually the path.
+        # Adjusted to handle both based on your existing logic.
+        if service_name == "OCR":
+            with open(tmp_path, "rb") as f:
+                result = processor_func(f.read())
+        else:
+            result = processor_func(tmp_path)
 
-        if final_data:
+        if result:
             update_job_status(job_id, "completed", {
-                "result": final_data,
-                "message": f"AI processing complete. Please review and confirm."
+                "result": result,
+                "message": f"{service_name} processing complete. Please review."
             })
         else:
-            update_job_status(job_id, "failed", {"error": "AI parsing failed"})
+            update_job_status(job_id, "failed", {"error": f"{service_name} parsing failed"})
 
     except Exception as e:
-        logger.error(f"Job {job_id} crashed: {str(e)}")
-        # 4. Handle unexpected crashes
+        logger.error(f"{service_name} Job {job_id} failed: {str(e)}")
         update_job_status(job_id, "failed", {"error": "Internal Processing Error"})
-    
-    finally:
-        # 5. Clean up the temp file so the server disk doesn't fill up
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
-async def run_ocr_pipeline(job_id: str, user_id: str, tmp_path: str):
-    try:
-        with open(tmp_path, "rb") as f:
-            file_bytes = f.read()
-
-        final_data = process_ledger_image(file_bytes)
-
-        if final_data:
-            if graph_service.is_available():
-                new_score = graph_service.log_transaction(user_id, final_data)
-            else:
-                new_score = 43
-
-            update_job_status(job_id, "completed", {
-                "result": final_data, 
-                "new_score": new_score
-            })
-        else:
-            update_job_status(job_id, "failed", {"error": "OCR parsing failed"})
-
-    except Exception as e:
-        logger.error(f"OCR Job {job_id} crashed: {str(e)}")
-        update_job_status(job_id, "failed", {"error": "Internal OCR Processing Error"})
-    
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
+# --- Routes ---
 
 @router.post("/process-voice")
 async def process_voice(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    resolved_user_id = user_id or current_user['id']
-    filename = file.filename or ""
-    if not filename.lower().endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
-        raise HTTPException(status_code=400, detail="Invalid file format")
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in SUPPORTED_AUDIO:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format: {ext}")
 
-    job_id = str(uuid.uuid4()) # Generate a unique "Buzzer" ID
-
+    job_id = str(uuid.uuid4())
     update_job_status(job_id, "processing")
-
+    
     tmp_path = await save_temp_file(file)
-
-    background_tasks.add_task(run_ai_pipeline, job_id, resolved_user_id, tmp_path)
+    background_tasks.add_task(
+        run_pipeline_task, job_id, current_user['id'], tmp_path, process_voice_entry, "Voice"
+    )
 
     return {"status": "accepted", "job_id": job_id}
 
@@ -107,16 +83,19 @@ async def process_voice(
 async def process_ledger(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    resolved_user_id = user_id or current_user['id']
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in SUPPORTED_IMAGES:
+        raise HTTPException(status_code=400, detail="Invalid image format")
+
     job_id = str(uuid.uuid4())
     update_job_status(job_id, "processing")
 
     tmp_path = await save_temp_file(file)
-
-    background_tasks.add_task(run_ocr_pipeline, job_id, resolved_user_id, tmp_path)
+    background_tasks.add_task(
+        run_pipeline_task, job_id, current_user['id'], tmp_path, process_ledger_image, "OCR"
+    )
 
     return {"status": "accepted", "job_id": job_id}
 
@@ -128,16 +107,22 @@ async def check_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job ID not found")
     return status
 
+
 @router.post("/confirm-transaction")
-async def confirm_tx(data: VoiceTransaction, current_user: dict = Depends(get_current_user)):
-    user_id = current_user['id']
-    data = data.model_dump()
-    # This is where the data is FINALLY saved to Neo4j
+async def confirm_tx(
+    data: VoiceTransaction, 
+    current_user: dict = Depends(get_current_user),
+    graph_service: GraphService = Depends(GraphService) # Using as a dependency
+):
     if not graph_service.is_available():
         raise HTTPException(status_code=503, detail="Database connection unavailable")
 
-    new_score = graph_service.log_transaction(user_id, data)
-    is_verified = graph_service.verify_transaction(user_id, data['amount'])
+    user_id = current_user['id']
+    tx_data = data.model_dump()
+    
+    # Logic execution
+    new_score = graph_service.log_transaction(user_id, tx_data)
+    is_verified = graph_service.verify_transaction(user_id, tx_data['amount'])
 
     if is_verified:
         new_score = graph_service.recalculate_user_score(user_id)
@@ -146,5 +131,5 @@ async def confirm_tx(data: VoiceTransaction, current_user: dict = Depends(get_cu
         "status": "success", 
         "new_score": new_score, 
         "verified": bool(is_verified),
-        "message": "Payment Verified!" if is_verified else "Logged to ledger"
+        "message": "Transaction verified and logged!" if is_verified else "Logged to ledger"
     }

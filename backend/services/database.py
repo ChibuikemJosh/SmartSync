@@ -30,22 +30,23 @@ class GraphService:
             try:
                 self.driver = GraphDatabase.driver(uri, auth=(user, password))
                 try:
-                        self.driver.verify_connectivity()
-                    except Exception as e:
-                        logging.warning(f"Neo4j verify_connectivity failed: {e}")
-                        # Treat failed verification as no driver so callers fall back
-                        try:
-                            self.driver.close()
-                        except Exception:
-                            pass
-                        self.driver = None
-                        # continue to next retry attempt
-                        if attempt == max_retries:
-                            logging.error("Could not verify Neo4j connectivity after retries; continuing without DB driver")
-                            break
-                        sleep = base_delay * (2 ** (attempt - 1))
-                        time.sleep(sleep)
-                        continue
+                    self.driver.verify_connectivity()
+                except Exception as e:
+                    logging.warning(f"Neo4j verify_connectivity failed: {e}")
+                    # Treat failed verification as no driver so callers fall back
+                try:
+                    self.driver.close()
+                except Exception:
+                    pass
+                self.driver = None
+                # continue to next retry attempt
+                    
+                if attempt == max_retries:
+                    logging.error("Could not verify Neo4j connectivity after retries; continuing without DB driver")
+                    break
+                sleep = base_delay * (2 ** (attempt - 1))
+                time.sleep(sleep)
+                continue
                     # If verify_connectivity succeeded, break out of attempts loop
                     break
             except Exception as e:
@@ -430,3 +431,24 @@ class GraphService:
                 if price_per_unit > (avg * 3):
                     return True, avg
         return False, 0
+
+    def get_transaction_by_id(self, tx_id: str) -> dict:
+        """
+        Fetches a transaction and its owner's ID.
+        Returns a dictionary of properties or None if not found.
+        """
+        query = """
+        MATCH (u:User)-[:PERFORMED]->(t:Transaction)
+        WHERE t.id = $tx_id
+        RETURN t {.*, user_id: u.id} AS transaction
+        """
+        try:
+            with self._session() as session:
+                result = session.run(query, tx_id=tx_id).single()
+                if result:
+                    return result["transaction"]
+                return None
+        except Exception as e:
+            # Import logger at the top of your database.py if not already there
+            print(f"Database error in get_transaction_by_id: {e}")
+            return None

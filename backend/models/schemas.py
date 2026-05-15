@@ -1,71 +1,72 @@
-"""
-Pydantic models for validation and documentation
-"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any, Dict
 import re
 
+# --- Shared Utilities ---
+def clean_numeric_string(v: str) -> str:
+    """Helper to strip currency symbols and common separators."""
+    return v.upper().replace("NGN", "").replace("NAIRA", "").replace(",", "").strip()
+
+# --- Models ---
 
 class VoiceTransaction(BaseModel):
     item: str = Field(..., description="The name of the item sold or expense incurred")
     amount: float = Field(..., gt=0, description="The cost in Naira (must be positive)")
     quantity: int = Field(default=1)
-    unit: str = Field(default="item", description="The unit of the item (e.g., 'kg', 'piece', bag, derica, paint, kg)")
+    unit: str = Field(default="item", description="The unit of the item (e.g., 'kg', 'piece')")
     type: str = Field(..., pattern="^(SALE|EXPENSE|CREDIT|DEBIT|GIG_COMPLETE|GIG_CONFIRMED)$")
-    timestamp: Optional[str] = None
-    notes: Optional[str] = "No additional notes"
-    verified: bool = False # Default to False until verified by Squad
-    is_anomaly: bool = False # Flag for potential fraud or errors, set by backend logic
+    timestamp: str | None = None
+    notes: str | None = "No additional notes"
+    verified: bool = False
+    is_anomaly: bool = False
 
-    @validator('amount', pre=True)
-    def ensure_float_amount(cls, v):
-        # In case the AI sends "5000" instead of 5000
+    @field_validator('amount', mode='before')
+    @classmethod
+    def parse_amount(cls, v: Any) -> float:
         if isinstance(v, str):
-            # Strip NGN, commas, and handle 'k'
-            clean_v = v.upper().replace("NGN", "").replace("NAIRA", "").replace(",", "").strip()
-            clean_v = re.sub(r'[^\d\.Kk]', '', clean_v) # Remove any non-numeric, non-dot, non-K characters
+            clean_v = clean_numeric_string(v)
+            clean_v = re.sub(r'[^\d\.K]', '', clean_v)
             if 'K' in clean_v:
                 try:
-                    result = float(clean_v.replace("K", "")) * 1000
-                    return result
+                    return float(clean_v.replace("K", "")) * 1000
                 except ValueError:
-                    return 0.0 # Default to 0.0 if we can't parse it
-
+                    return 0.0
             try:
                 return float(clean_v)
             except ValueError:
-                return float(v) if v else 0.0
+                return 0.0
+        return float(v) if v is not None else 0.0
 
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return 0.0
-            
-    @validator('quantity', pre=True)
-    def ensure_int_quantity(cls, v):
-        """Ensures quantity is a clean integer, even if AI sends strings or floats."""
+    @field_validator('quantity', mode='before')
+    @classmethod
+    def parse_quantity(cls, v: Any) -> int:
         if isinstance(v, str):
             try:
-                # Handle common textual numbers (Optional: add a dict for 'one','two', etc. if needed)
-                clean_v = v.strip().split()[0] # Take first part in case of "5 units"
-                return int(float(clean_v))
+                # Extracts the first number found in a string like "5 bags"
+                match = re.search(r"[-+]?\d*\.\d+|\d+", v)
+                return int(float(match.group())) if match else 1
             except (ValueError, TypeError):
-                return 1 # Default to 1 if we can't parse it
-        if isinstance(v, float):
-            return int(v)
-        return v
-    
+                return 1
+        return int(v) if v is not None else 1
+
+
+class ChatRequest(BaseModel):
+    """New model for handling combined text and voice inputs."""
+    message: str | None = None
+    voice_path: str | None = None
+
 
 class VoiceProcessResponse(BaseModel):
     status: str
-    transaction: Optional[VoiceTransaction] = None
-    message: Optional[str] = None
+    transaction: VoiceTransaction | None = None
+    message: str | None = None
+
 
 class OCRProcessResponse(BaseModel):
-    """Response model for OCR processing"""
     status: str
     extracted_data: Dict[str, Any]
     image_text: str
+
 
 class LocationSchema(BaseModel):
     city: str
@@ -82,8 +83,8 @@ class TierInfo(BaseModel):
 class UserCreate(BaseModel):
     id: str
     name: str
-    email: str # Added email
-    password: str # Added password
+    email: str
+    password: str
     role: str = Field(..., pattern="^(Trader|Worker|Both)$")
     location: LocationSchema
 
@@ -96,46 +97,31 @@ class UserProfile(BaseModel):
     location: LocationSchema
     trust_score: int = 43
     tier: TierInfo
-    skills: Optional[list[str]] = []
+    skills: List[str] = []
 
 
 class DashboardResponse(BaseModel):
     profile: UserProfile
-    recent_transactions: list[VoiceTransaction]
+    recent_transactions: List[VoiceTransaction]
 
 
-# Response and Request models for Squad routes
-
-class ErrorResponse(BaseModel):
-    status: str = "error"
-    message: str
-    code: Optional[int] = None
-    details: Optional[Any] = None
-
+# --- Squad/Financial Models ---
 
 class VirtualAccountRequest(BaseModel):
     merchant_id: str
     business_name: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    first_name: str | None = None
+    last_name: str | None = None
     email: str
     phone: str
 
-    @validator('phone')
-    def validate_nigerian_phone(cls, v):
-        # Basic regex for Nigerian phone numbers (starts with +234 or 0, followed by 10 digits)
+    @field_validator('phone')
+    @classmethod
+    def validate_nigerian_phone(cls, v: str) -> str:
         pattern = r'^(\+234|0)[789][01]\d{8}$'
         if not re.match(pattern, v):
             raise ValueError('Invalid Nigerian phone number format')
         return v.strip()
-
-
-class VirtualAccountResponse(BaseModel):
-    status: str
-    account_number: str
-    bank_name: str
-    merchant_id: str
-    business_name: str
 
 
 class PaymentLinkRequest(BaseModel):
@@ -143,26 +129,17 @@ class PaymentLinkRequest(BaseModel):
     amount: float
     transaction_id: str
     description: str
-    customer_email: Optional[str] = None
-
-
-class PaymentLinkResponse(BaseModel):
-    status: str
-    payment_link: str
-    transaction_id: str
-    amount: float
-
-
-class EscrowRequest(BaseModel):
-    gig_id: str
-    trader_id: str
-    worker_id: str
-    amount: float
+    customer_email: str | None = None
 
 
 class WithdrawalRequest(BaseModel):
     user_id: str
-    amount: float          # in Naira
+    amount: float
     bank_code: str
     account_number: str
-    narration: Optional[str] = "SmartSync withdrawal"
+    narration: str | None = "SmartSync withdrawal"
+
+class EscrowRequest(BaseModel):
+    user_id: str
+    amount: float
+    description: str

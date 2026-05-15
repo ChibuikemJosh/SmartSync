@@ -1,40 +1,56 @@
-from fastapi import APIRouter, HTTPException, Depends
 import logging
+from fastapi import APIRouter, HTTPException, Depends
 from services.ai_logic import transcribe_audio, _get_client
 from services.database import GraphService
 from utils.dependencies import get_current_user
-import json
+from models.schemas import ChatRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 db = GraphService()
 
 @router.post("/")
-async def chat_with_records(message: str = None, voice_path: str = None, current_user: dict = Depends(get_current_user)):
+async def chat_with_records(
+    data: ChatRequest, 
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user['id']
-    # 1. If it's voice, transcribe it first
-    user_query = message
-    if voice_path:
-        user_query = transcribe_audio(voice_path)
-    
-    if not user_query:
-        raise HTTPException(status_code=400, detail="No message or voice provided")
+    user_query = data.message
 
-    # 2. Use Groq to turn the question into a Neo4j Cypher query
+    # 1. Handle Voice Input if provided
+    if data.voice_path:
+        try:
+            transcribed_text = transcribe_audio(data.voice_path)
+            user_query = transcribed_text if transcribed_text else user_query
+        except Exception as e:
+            logger.error(f"Transcription Error: {e}")
+            raise HTTPException(status_code=500, detail="Failed to process voice note")
+
+    if not user_query:
+        raise HTTPException(status_code=400, detail="Oga, provide a message or voice note abeg.")
+
+    # 2. Generate Cypher query
     cypher_query = generate_cypher(user_query, user_id)
+    # Clean the markdown code blocks if the LLM includes them
     cypher_query = cypher_query.replace("```cypher", "").replace("```", "").strip()
-    
-    try: # 3. Run the query on Neo4j
+
+    # 3. Execute on Neo4j
+    try:
         with db._session() as session:
             result = session.run(cypher_query).data()
     except Exception as e:
-        logger.error(f"Cypher Error: {e}")
-        result = [] # Return empty list so summarize_results can handle it
-    
-    # 4. Use Groq to explain the result to the user
+        logger.error(f"Cypher Execution Error: {e}")
+        # We pass an empty list so the summarizer can explain the 'no results' state
+        result = []
+
+    # 4. Generate AI response
     answer = summarize_results(user_query, result)
-    
-    return {"query": user_query, "answer": answer}
+
+    return {
+        "query": user_query, 
+        "answer": answer,
+        "status": "success"
+    }
 
 def generate_cypher(user_query: str, user_id: str) -> str:
     client = _get_client()
@@ -51,18 +67,15 @@ def generate_cypher(user_query: str, user_id: str) -> str:
        - "How much I get" or "wetin be my balance" means sum of SALE minus sum of EXPENSE.
        - "Wetin I sell" means List items where type='SALE'.
        - "I don pay" means check verified=true.
-    5. You are only allowed to query the transactions of the user with id = {user_id}. Do not attempt to query other users.
-    6. You can only match, update and return do not delete data.
-    7. If the user asks for a time range, use the 'timestamp' field
-         - "last month" means transactions from 2025-12
-         - "this year" means transactions from 2026-01-01 to 2026-12-31
-         - "last week" means transactions from the last 7 days
+    5. Only query transactions of user with id = '{user_id}'.
+    6. MATCH, UPDATE, and RETURN only. NO DELETE.
+    7. Time Range Logic:
+         - "last month" -> timestamp CONTAINS '2025-12'
+         - "this year" -> timestamp STARTS WITH '2026'
+         - "last week" -> Calculate based on 2026-05-15
 
     USER_ID: "{user_id}"
     USER_QUESTION: "{user_query}"
-    
-    Return ONLY the Cypher string. Do not explain.
-    Example: "How much did I make in Dec?" -> MATCH (u:User {{id: '{user_id}'}})-[:PERFORMED]->(t:Transaction) WHERE t.type = 'SALE' AND t.timestamp CONTAINS '2025-12' RETURN sum(t.amount) as total
     """
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
@@ -70,9 +83,14 @@ def generate_cypher(user_query: str, user_id: str) -> str:
     )
     return response.choices[0].message.content
 
-def summarize_results(user_query, result_data):
+def summarize_results(user_query: str, result_data: list):
     client = _get_client()
-    prompt = f"User asked: {user_query}. The database returned: {result_data}. Answer the user like a helpful, witty Nigerian market assistant. Use a mix of professional English and light Nigerian Pidgin where appropriate. Be concise but informative. If the result is empty, say you couldn't fing any record of that. Be encouraging about their business growth"
+    prompt = (
+        f"User asked: {user_query}. The database returned: {result_data}. "
+        "Answer like a helpful, witty Nigerian market assistant. Use a mix of English and Pidgin. "
+        "Be concise. If the result is empty, tell them you no see any record for that one. "
+        "Always be encouraging about their business growth."
+    )
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"

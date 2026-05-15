@@ -1,167 +1,130 @@
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from fastapi.responses import JSONResponse
-from models.schemas import UserCreate, UserProfile, TierInfo
-from dotenv import load_dotenv
-from jose import JWTError, jwt
 import os
 import logging
-import traceback
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from jose import JWTError, jwt
+from dotenv import load_dotenv
+
+from models.schemas import UserCreate, UserProfile, TierInfo
 from services.database import GraphService
 from services.auth_logic import hash_password, verify_password, create_access_token
 
-router = APIRouter()
+load_dotenv()
+
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 db = GraphService()
 
-load_dotenv()
-
 SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY not found in environment variables")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 
-
-def _ensure_db_available():
-    if not db.is_available():
-        raise HTTPException(status_code=503, detail="Database connection unavailable")
-
-
-def _cors_headers():
-    return {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Methods": "*",
-    }
-
-
-# Simple in-memory fallback user store for environments where Neo4j is unavailable.
-# This is a temporary development aid only and not for production use.
+# Temporary In-Memory Fallback
 _in_memory_users = {}
 
-def _get_user_by_email_fallback(email: str):
-    return _in_memory_users.get(email)
-
-def _create_user_fallback(user_dict: dict):
-    _in_memory_users[user_dict['email']] = {
-        'id': user_dict['id'],
-        'name': user_dict.get('name'),
-        'email': user_dict.get('email'),
-        'password': user_dict.get('password'),
-        'role': user_dict.get('role', 'Trader'),
-        'trust_score': user_dict.get('trust_score', 43)
-    }
-
-
-@router.post("/register", response_model=UserProfile)
-async def register_user(user: UserCreate):
-    try:
-        # Use real DB if available, otherwise fall back to in-memory store
-        # Try DB operations, but fall back to in-memory on any DB error (e.g., auth denied)
+class UserStore:
+    """Helper to abstract DB vs In-Memory logic"""
+    @staticmethod
+    def get_by_email(email: str) -> Optional[dict]:
         try:
             if db.is_available():
-                existing = db.get_user_by_email(user.email)
-                if existing:
-                    return JSONResponse(status_code=400, content={"detail": "Email already registered"}, headers=_cors_headers())
+                return db.get_user_by_email(email)
+        except Exception:
+            logging.warning("Database unreachable, checking fallback store.")
+        return _in_memory_users.get(email)
 
-                user_dict = user.model_dump()
-                user_dict["password"] = hash_password(user.password)
+    @staticmethod
+    def get_by_id(user_id: str) -> Optional[dict]:
+        try:
+            if db.is_available():
+                return db.get_user_by_id(user_id)
+        except Exception:
+            pass
+        return next((u for u in _in_memory_users.values() if u['id'] == user_id), None)
+
+    @staticmethod
+    def save(user_dict: dict):
+        try:
+            if db.is_available():
                 db.create_user_node(user_dict)
-            else:
-                raise RuntimeError("DB driver not available")
-        except Exception:
-            # Fallback in-memory store
-            if _get_user_by_email_fallback(user.email):
-                return JSONResponse(status_code=400, content={"detail": "Email already registered"}, headers=_cors_headers())
-            user_dict = user.model_dump()
-            user_dict["password"] = hash_password(user.password)
-            _create_user_fallback(user_dict)
+                return
+        except Exception as e:
+            logging.error(f"DB Save failed: {e}")
+        _in_memory_users[user_dict['email']] = user_dict
 
-        return UserProfile(
-            id=user.id,
-            name=user.name,
-            email=user.email,
-            role=user.role,
-            location=user.location,
-            trust_score=43,
-            tier=TierInfo(name="New", color="#2196F3", next_milestone=45)
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.exception("Registration error")
-        tb = traceback.format_exc()
-        logging.error(tb)
-        return JSONResponse(status_code=503, content={"detail": f"Registration failed: {str(e)}"}, headers=_cors_headers())
-
-
-@router.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    try:
-        # Attempt DB auth, but fall back to in-memory on any DB error
-        try:
-            if db.is_available():
-                user = db.get_user_by_email(form_data.username)
-                if not user or not verify_password(form_data.password, user['password']):
-                    return JSONResponse(status_code=401, content={"detail": "Invalid email or password"}, headers=_cors_headers())
-                user_id = user['id']
-            else:
-                raise RuntimeError("DB driver not available")
-        except Exception:
-            user = _get_user_by_email_fallback(form_data.username)
-            if not user or not verify_password(form_data.password, user['password']):
-                return JSONResponse(status_code=401, content={"detail": "Invalid email or password"}, headers=_cors_headers())
-            user_id = user['id']
-
-        access_token = create_access_token(data={"sub": user_id})
-        return JSONResponse(status_code=200, content={"access_token": access_token, "token_type": "bearer"}, headers=_cors_headers())
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.exception("Login error")
-        tb = traceback.format_exc()
-        logging.error(tb)
-        return JSONResponse(status_code=503, content={"detail": f"Login failed: {str(e)}"}, headers=_cors_headers())
-
+# --- Dependencies ---
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        # Try DB first; on DB errors, fallback to in-memory store
-        user = None
-        try:
-            if db.is_available():
-                user = db.get_user_by_id(user_id)
-        except Exception:
-            user = None
-
-        if not user:
-            # Search fallback users by id
-            for u in _in_memory_users.values():
-                if u['id'] == user_id:
-                    user = u
-                    break
-        if user is None:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
+            raise credentials_exception
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise credentials_exception
 
+    user = UserStore.get_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+# --- Routes ---
+
+@router.post("/register", response_model=UserProfile)
+async def register_user(user: UserCreate):
+    if UserStore.get_by_email(user.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user_dict = user.model_dump()
+    user_dict["password"] = hash_password(user.password)
+    user_dict["trust_score"] = 43 # Default score
+    
+    UserStore.save(user_dict)
+
+    return UserProfile(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        role=user.role,
+        location=user.location,
+        tier=TierInfo(name="New", color="#2196F3", next_milestone=45)
+    )
+
+@router.post("/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = UserStore.get_by_email(form_data.username)
+    
+    if not user or not verify_password(form_data.password, user['password']):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid email or password"
+        )
+
+    access_token = create_access_token(data={"sub": user['id']})
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserProfile)
 async def get_me(current_user: dict = Depends(get_current_user)):
+    # Standardizing location format from dictionary or flat DB fields
+    location_data = current_user.get("location", {
+        "city": current_user.get("city", "Unknown"),
+        "state": current_user.get("state", "Unknown"),
+        "country": current_user.get("country", "Nigeria")
+    })
+
     return UserProfile(
         id=current_user["id"],
         name=current_user.get("name", "User"),
         email=current_user.get("email", ""),
         role=current_user.get("role", "Trader"),
-        location={
-            "city": current_user.get("city", "Unknown"),
-            "state": current_user.get("state", "Unknown"),
-            "country": current_user.get("country", "Nigeria"),
-        },
+        location=location_data,
         trust_score=current_user.get("trust_score", 43),
         tier=TierInfo(name="New", color="#2196F3", next_milestone=45),
     )
