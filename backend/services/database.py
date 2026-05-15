@@ -60,7 +60,7 @@ class GraphService:
     def is_available(self):
         return self.driver is not None
 
-    def _session(self):
+    def get_session(self):
         if not self.driver:
             raise RuntimeError("Database connection not available")
         return self.driver.session()
@@ -71,7 +71,7 @@ class GraphService:
 
     def create_user_node(self, user_data):
         """Creates a new user with location and base score"""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MERGE (u:User {id: $id})
             SET u.name = $name,
@@ -105,7 +105,7 @@ class GraphService:
 
     def log_transaction(self, user_id, tx_data):
         """Logs the sale, then recalculates the dynamic Trust Score"""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             CREATE (t:Transaction {
@@ -179,7 +179,7 @@ class GraphService:
 
     def create_escrow(self, gig_id, trader_id, worker_id, amount):
         """Creates a Gig node and links Trader and Worker in an Escrow relationship."""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (t:User {id: $trader_id}), (w:User {id: $worker_id})
             CREATE (g:Gig {id: $gig_id, amount: $amount, status: 'locked', created_at: datetime()})
@@ -190,7 +190,7 @@ class GraphService:
 
     def release_escrow_status(self, gig_id):
         """Updates Gig status to released and timestamps the payout."""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (g:Gig {id: $gig_id})
             SET g.status = 'released', 
@@ -201,7 +201,7 @@ class GraphService:
 
     def get_gig_details(self, gig_id):
         """Fetches Gig info to replace your teammate's placeholders."""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (w:User)-[:ASSIGNED_TO]->(g:Gig {id: $gig_id})<-[:FUNDED]-(t:User)
             RETURN g.amount as amount, g.status as status, w.account_number as account_number, 
@@ -214,7 +214,7 @@ class GraphService:
         """
         Marks the gig as refunded and records who canceled.
         """
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (g:Gig {id: $gig_id})
             WHERE g.status = 'locked'
@@ -237,7 +237,7 @@ class GraphService:
     
     def get_history(self, user_id):
         # execute_read expects a callable; use the available get_user_history function
-        with self._session() as session:
+        with self.get_session() as session:
             return session.execute_read(self.get_user_history, user_id)
 
     @staticmethod
@@ -281,7 +281,7 @@ class GraphService:
     
     def update_user_virtual_account(self, user_id, account_number, bank_name):
         """Saves the Squad virtual account info to the User node."""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             SET u.virtual_account = $account_number,
@@ -292,7 +292,7 @@ class GraphService:
 
     def recalculate_user_score(self, user_id):
         """Recalculates the user's score based on all their transactions."""
-        with self._session() as session:
+        with self.get_session() as session:
             history = session.execute_read(self.get_user_history, user_id)
             new_score = self.calculate_decayed_score(history)
             session.execute_write(self.update_user_score, user_id, new_score)
@@ -300,7 +300,7 @@ class GraphService:
     
     def get_user_by_email(self, email: str):
         """Fetches a user and their hashed password for authentication"""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (u:User {email: $email})
             RETURN u.id as id, u.name as name, u.password as password, 
@@ -311,7 +311,7 @@ class GraphService:
     
     def get_user_by_id(self, user_id: str):
         """Fetches a user profile by their ID (used by JWT dependency)"""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             RETURN u.id as id, u.name as name, u.email as email, 
@@ -322,7 +322,7 @@ class GraphService:
             return result.data() if result else None
 
     def get_user_dashboard(self, user_id):
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             OPTIONAL MATCH (u)-[:PERFORMED]->(t:Transaction)
@@ -360,7 +360,7 @@ class GraphService:
         """
         Looks for the most recent unverified SALE matching the Squad payment amount.
         """
-        with self._session() as session:
+        with self.get_session() as session:
             # We allow a 1% margin for small fee differences
             query = """
             MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction {type: 'SALE', verified: false})
@@ -378,7 +378,7 @@ class GraphService:
 
     def check_if_verified(self, tx_id: str) -> bool:
         """Checks if a specific transaction is already marked as verified."""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (t:Transaction {id: $tx_id})
             RETURN t.verified as verified
@@ -391,7 +391,7 @@ class GraphService:
         
     def update_transaction_node(self, tx_id: str, data: dict):
         """Updates an unverified transaction's details."""
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (t:Transaction {id: $tx_id})
             SET t.item = $item,
@@ -416,7 +416,7 @@ class GraphService:
 
     def check_price_anomaly(self, item, unit, amount, quantity):
         price_per_unit = amount / quantity if quantity else amount
-        with self._session() as session:
+        with self.get_session() as session:
             query = """
             MATCH (t:Transaction {item: $item, unit: $unit})
             RETURN avg(t.amount / t.quantity) as avg_price, 

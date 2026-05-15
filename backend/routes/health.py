@@ -13,7 +13,7 @@ async def health_check():
     db_status = "Healthy"
     try:
         if db.is_available():
-            with db._session() as session:
+            with db.get_session() as session:
                 session.run("RETURN 1")
         else:
             db_status = "Unhealthy: Neo4j driver unavailable"

@@ -166,3 +166,7 @@ class WithdrawalRequest(BaseModel):
     bank_code: str
     account_number: str
     narration: Optional[str] = "SmartSync withdrawal"
+
+class ChatRequest(BaseModel):
+    message: str | None = None
+    voice_path: str | None = None

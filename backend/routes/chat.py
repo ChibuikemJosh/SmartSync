@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 import logging
+from models.schemas import ChatRequest
 from services.ai_logic import transcribe_audio, _get_client
 from services.database import GraphService
 from utils.dependencies import get_current_user
@@ -10,12 +11,12 @@ logger = logging.getLogger(__name__)
 db = GraphService()
 
 @router.post("/")
-async def chat_with_records(message: str = None, voice_path: str = None, current_user: dict = Depends(get_current_user)):
+async def chat_with_records(data: ChatRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user['id']
     # 1. If it's voice, transcribe it first
-    user_query = message
-    if voice_path:
-        user_query = transcribe_audio(voice_path)
+    user_query = data.message
+    if data.voice_path:
+        user_query = transcribe_audio(data.voice_path)
     
     if not user_query:
         raise HTTPException(status_code=400, detail="No message or voice provided")
@@ -25,7 +26,7 @@ async def chat_with_records(message: str = None, voice_path: str = None, current
     cypher_query = cypher_query.replace("```cypher", "").replace("```", "").strip()
     
     try: # 3. Run the query on Neo4j
-        with db._session() as session:
+        with db.get_session() as session:
             result = session.run(cypher_query).data()
     except Exception as e:
         logger.error(f"Cypher Error: {e}")

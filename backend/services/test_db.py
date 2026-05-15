@@ -15,7 +15,7 @@ def test_connection():
             return
 
         # 1. Simple Connectivity
-        with db._session() as session:
+        with db.get_session() as session:
             res = session.run("RETURN 'Connection Successful' as msg").single()
             print(f"✅ {res['msg']}")
 
