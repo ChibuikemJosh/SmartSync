@@ -8,7 +8,7 @@ import uuid
 from typing import Callable, Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Depends
-from models.schemas import VoiceTransaction, VoiceProcessResponse, ErrorResponse
+from models.schemas import VoiceTransaction, VoiceProcessResponse
 from services.ai_logic import process_voice_entry, update_job_status, get_job_status
 from services.database import GraphService
 from services.ocr_logic import process_ledger_image
