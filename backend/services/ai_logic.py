@@ -24,15 +24,16 @@ DEFAULT_TTL = 3600  # 1 hour
 _groq_client: Optional[Groq] = None
 http_client = httpx.Client()
 
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+
 # Redis Initialization
 try:
-    r = redis.Redis(
-        host=os.getenv("REDIS_HOST", "localhost"),
-        port=int(os.getenv("REDIS_PORT", 6379)),
-        decode_responses=True
-    )
-    # Test connection
+    if redis_url:
+        r = redis.Redis.from_url(redis_url, decode_responses=True)
+    else:
+        r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=int(os.getenv("REDIS_PORT", 6379)), decode_responses=True)
     r.ping()
+    logger.info("✅ Connected to Redis successfully.")
 except redis.ConnectionError:
     logger.error("❌ Redis connection failed. Job tracking will be disabled.")
     r = None
