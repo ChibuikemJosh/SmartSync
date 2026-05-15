@@ -1,15 +1,30 @@
+import sys
+import os
+import uuid
+import logging
+from datetime import datetime, timedelta, timezone
+
+# Ensure the app root is in the python path so it can find 'services'
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from services.database import GraphService
 from services.auth_logic import hash_password
-import uuid
-from datetime import datetime, timedelta, timezone
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def seed_everything():
     db = GraphService()
-    print("🌱 Seeding database with demo data...")
+    print("\n🌱 Seeding SmartSync database with demo data...")
 
-    # Clear existing data (OPTIONAL - use with caution!)
-    # with db.driver.session() as session:
+    if not db.is_available():
+        print("❌ ERROR: Neo4j is unavailable, skipping seed data.")
+        return
+
+    # Clear existing data (Uncomment if you want a fresh slate every time)
+    # with db._session() as session:
     #     session.run("MATCH (n) DETACH DELETE n")
+    #     print("🧹 Cleared old database data.")
 
     demo_users = [
         {
@@ -38,11 +53,8 @@ def seed_everything():
         }
     ]
 
-    if not db.is_available():
-        print("⚠️ Neo4j is unavailable, skipping seed data")
-        return
-
     for u in demo_users:
+        # Create User
         db.create_user_node({
             "id": u['id'],
             "name": u['name'],
@@ -52,21 +64,28 @@ def seed_everything():
             "location": {"city": u['city'], "state": u['city'], "country": "Nigeria"},
             "trust_score": u['score']
         })
-        
-        # Add a few transactions for Alhaji Musa so his history looks full
+        print(f"👤 Created user: {u['name']} ({u['role']})")
+
+        # Add a few transactions for Alhaji Musa so his dashboard looks alive
         if u['id'] == "user_pro_001":
+            print(f"📦 Generating transaction history for {u['name']}...")
             for i in range(5):
                 # Backdate transactions slightly
                 ts = (datetime.now(timezone.utc) - timedelta(days=i*2)).isoformat()
                 db.log_transaction(u['id'], {
                     "item": f"Wholesale Supply {i+1}",
                     "amount": 150000 + (i * 10000),
+                    "quantity": 10 + i,
+                    "unit": "bag",
                     "type": "SALE",
                     "verified": True,
-                    "timestamp": ts
+                    "timestamp": ts,
+                    "is_anomaly": False
                 })
 
-    print("✅ Seeding complete! Login with password: password123")
+    print("\n✅ Seeding complete! You can now log in with:")
+    print("   Email: musa@market.com")
+    print("   Password: password123")
     db.close()
 
 if __name__ == "__main__":

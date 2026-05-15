@@ -1,39 +1,58 @@
-# Exclude local virtual environments and Python caches
+# --- Python & Environment ---
 venv/
-backend/venv/
 .venv/
+env/
 __pycache__/
 *.py[cod]
+*.so
+.python-version
 
-# Node modules and build artifacts
-node_modules/
-frontend/node_modules/
-frontend/temp-app/node_modules/
-frontend_new/**/build/
-frontend_new/**/ephemeral/
-
-# Flutter and Dart caches
-build/
-/.dart_tool/
-/.flutter-plugins
-/.flutter-plugins-dependencies
-
-# IDE and editor files
-.vscode/
-.idea/
-
-# Plugin symlinks and pub cache
-**/.plugin_symlinks/
-.pub-cache/
-
-# Git
-.git
-
-# Environment files
+# --- SmartSync Environment Secrets ---
+# NEVER include these in your image
 .env
 .env.*
+!.env.example
 
-# Misc
-*.log
-tmp/
+# --- Node.js / Frontend ---
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.next/
+out/
 dist/
+build/
+
+# --- Flutter / Dart ---
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+**/.plugin_symlinks/
+
+# --- Git ---
+.git
+.gitignore
+.gitattributes
+
+# --- IDEs & OS Files ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Logs & Temp ---
+*.log
+logs/
+tmp/
+temp/
+# Exclude the actual uploaded files if you saved any locally
+storage/
+uploads/
+
+# --- Databases ---
+*.sqlite3
+*.db

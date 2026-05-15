@@ -1,38 +1,44 @@
+# Use the exact version to match your .python-version
 FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8000
+
 WORKDIR /app
 
-# Install system packages required for building native extensions and common multimedia libs
+# 1. Install system dependencies
+# Added libmagic for file type detection and cleaned up apt to keep image small
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
-    git \
     curl \
-    ca-certificates \
     libsndfile1 \
+    ffmpeg \
     libgl1 \
     libglib2.0-0 \
-    libsm6 \
-    libxrender1 \
-    libxext6 \
-    ffmpeg \
-    cargo \
+ && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to leverage Docker layer caching
-COPY backend/requirements.txt /app/requirements.txt
+# 2. Setup Python environment
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Upgrade pip and install Python deps
-RUN pip install --upgrade pip setuptools wheel
+# 3. Leverage Docker caching for dependencies
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source
-COPY .
+# 4. Copy the rest of the application
+# FIX: Use '.' to copy current dir to WORKDIR
+COPY . .
 
-# Expose port (Render will set PORT env; default to 8000)
+# 5. Security: Run as non-root user
+# This prevents the app from having admin rights inside the container
+RUN useradd -m smartsync
+USER smartsync
+
+# 6. Expose and Run
 EXPOSE 8000
-ENV PORT=8000
 
-# Start command uses $PORT if provided by the environment
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# We use the shell form to allow variable substitution for PORT
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}

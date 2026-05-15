@@ -1,13 +1,15 @@
 fastapi==0.109.0
 uvicorn==0.27.0
 requests==2.31.0
+httpx==0.27.0
 python-multipart==0.0.6
 pydantic==2.7.4
 pydantic-settings==2.3.4
 python-dotenv==1.0.0
 groq==0.5.0
-neo4j
-redis
+neo4j==5.20.1
+redis==5.0.4
 numpy
 python-jose[cryptography]
 passlib
+bcrypt
