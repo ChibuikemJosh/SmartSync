@@ -139,3 +139,9 @@ class PaymentLinkRequest(BaseModel):
     user_id: str
     amount: float = Field(..., gt=0)
     description: Optional[str] = "Payment for goods/services"
+
+class EscrowRequest(BaseModel):
+    buyer_id: str
+    seller_id: str
+    amount: float = Field(..., gt=0)
+    description: Optional[str] = "Escrow for goods/services"

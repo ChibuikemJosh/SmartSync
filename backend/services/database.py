@@ -284,3 +284,39 @@ class GraphService:
             # Neo4j integers need explicit casting for Pydantic
             user['trust_score'] = int(user.get('trust_score', 43))
             return user
+
+    def verify_transaction(self, tx_id: str):
+        """Marks a transaction as verified and updates the user's score."""
+        with self._session() as session:
+            # First, mark the transaction as verified
+            query = """
+            MATCH (t:Transaction {id: $tx_id})
+            SET t.verified = true, t.verified_at = datetime()
+            RETURN t.user_id AS user_id
+            """
+            result = session.run(query, tx_id=tx_id).single()
+            if not result:
+                raise ValueError("Transaction not found")
+            
+            user_id = result["user_id"]
+            # Then recalculate the user's score since verification is a big deal
+            return self.recalculate_user_score(user_id)
+
+    def release_escrow(self, gig_id):
+        """Marks the gig as completed and releases the funds."""
+        with self._session() as session:
+            query = """
+            MATCH (g:Gig {id: $gig_id})
+            SET g.status = 'completed', g.completed_at = datetime()
+            """
+            session.run(query, gig_id=gig_id)
+
+    def release_escrow_status(self, gig_id):
+        """Checks if the gig is ready for release."""
+        with self._session() as session:
+            query = """
+            MATCH (g:Gig {id: $gig_id})
+            RETURN g.status AS status
+            """
+            result = session.run(query, gig_id=gig_id).single()
+            return result["status"] if result else None
