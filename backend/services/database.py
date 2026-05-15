@@ -1,62 +1,44 @@
 """
-Database configuration and connection management
+Database configuration and connection management for SmartSync
 """
-
-from neo4j import GraphDatabase
 import os
-from dotenv import load_dotenv
-from datetime import datetime
-import math
-from datetime import timezone
 import uuid
 import time
+import math
 import logging
-
-logger = logging.getLogger(__name__)
+from datetime import datetime, timezone
+from neo4j import GraphDatabase
+from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 class GraphService:
     def __init__(self):
         self.driver = None
-        uri = os.getenv("NEO4J_URI", "")
-        user = os.getenv("NEO4J_USER", "")
+        uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        user = os.getenv("NEO4J_USER", "neo4j")
         password = os.getenv("NEO4J_PASSWORD", "")
 
         max_retries = int(os.getenv("NEO4J_CONNECT_RETRIES", 5))
         base_delay = float(os.getenv("NEO4J_BASE_DELAY", 1.0))
 
+        # --- Connection Retry Loop ---
         for attempt in range(1, max_retries + 1):
             try:
-                self.driver = GraphDatabase.driver(uri, auth=(user, password))
-                try:
-                    self.driver.verify_connectivity()
-                except Exception as e:
-                    logging.warning(f"Neo4j verify_connectivity failed: {e}")
-                    # Treat failed verification as no driver so callers fall back
-                try:
-                    self.driver.close()
-                except Exception:
-                    pass
-                self.driver = None
-                # continue to next retry attempt
-                    
-                if attempt == max_retries:
-                    logging.error("Could not verify Neo4j connectivity after retries; continuing without DB driver")
-                    break
-                sleep = base_delay * (2 ** (attempt - 1))
-                time.sleep(sleep)
-                continue
-                    # If verify_connectivity succeeded, break out of attempts loop
-                    break
+                temp_driver = GraphDatabase.driver(uri, auth=(user, password))
+                temp_driver.verify_connectivity()
+                self.driver = temp_driver
+                logger.info(f"✅ Neo4j connected successfully on attempt {attempt}")
+                break
             except Exception as e:
-                logging.warning(f"Attempt {attempt} to connect to Neo4j failed: {e}")
-                self.driver = None
+                logger.warning(f"⚠️ Attempt {attempt} failed to connect to Neo4j: {e}")
                 if attempt == max_retries:
-                    logging.error("Could not connect to Neo4j after retries; continuing without DB driver")
-                    break
-                sleep = base_delay * (2 ** (attempt - 1))
-                time.sleep(sleep)
+                    logger.error("❌ Could not connect to Neo4j after max retries.")
+                    self.driver = None
+                else:
+                    sleep_time = base_delay * (2 ** (attempt - 1))
+                    time.sleep(sleep_time)
 
     def is_available(self):
         return self.driver is not None
@@ -69,6 +51,8 @@ class GraphService:
     def close(self):
         if self.driver:
             self.driver.close()
+
+    # --- User Management ---
 
     def create_user_node(self, user_data):
         """Creates a new user with location and base score"""
@@ -87,14 +71,12 @@ class GraphService:
                 u.created_at = $created_at
             RETURN u.id
             """
-
             loc = user_data.get('location', {})
-
             session.run(query,
                 id=user_data['id'],
                 name=user_data['name'],
-                email=user_data['email'], # Save email
-                password=user_data['password'], # Save password
+                email=user_data['email'],
+                password=user_data['password'],
                 role=user_data['role'],
                 city=loc.get('city'),
                 state=loc.get('state'),
@@ -104,8 +86,13 @@ class GraphService:
                 created_at=datetime.now(timezone.utc).isoformat()
             )
 
+    # --- Transaction & Trust Score Logic ---
+
     def log_transaction(self, user_id, tx_data):
-        """Logs the sale, then recalculates the dynamic Trust Score"""
+        """Logs a transaction and triggers a Trust Score update."""
+        tx_id = str(uuid.uuid4())
+        timestamp = tx_data.get('timestamp') or datetime.now(timezone.utc).isoformat()
+
         with self._session() as session:
             query = """
             MATCH (u:User {id: $user_id})
@@ -122,12 +109,8 @@ class GraphService:
                 is_anomaly: $is_anomaly
             })
             CREATE (u)-[:PERFORMED]->(t)
-            RETURN t
+            RETURN t.id
             """
-            # Ensure we have defaults for missing fields (like from Squad webhooks)
-            tx_id = str(uuid.uuid4())
-            timestamp = tx_data.get('timestamp') or datetime.now(timezone.utc).isoformat()
-        
             session.run(query, 
                 user_id=user_id,
                 tx_id=tx_id,
@@ -141,166 +124,92 @@ class GraphService:
                 verified=tx_data.get('verified', False),
                 is_anomaly=tx_data.get('is_anomaly', False)
             )
-
-            # 2. Fetch all transactions to calculate the new decayed score
-            history = session.execute_read(self.get_user_history, user_id)
-            
-            # 3. Calculate the new score in Python
-            new_score = self.calculate_decayed_score(history)
-            
-            # 4. Save the new score back to the User node
-            session.execute_write(self.update_user_score, user_id, new_score)
-            
-            return self.recalculate_user_score(user_id) # Return the updated score for frontend display 
-        
-    @staticmethod
-    def _create_tx_node_only(tx, user_id, data):
-        query = """
-        MATCH (u:User {id: $user_id})
-        CREATE (t:Transaction {
-            item: $item,
-            amount: $amount,
-            quantity: $quantity,
-            type: $type,
-            timestamp: $timestamp,
-            is_anomaly: $is_anomaly,
-            verified: false
-        })
-        CREATE (u)-[:PERFORMED]->(t)
-        """
-        tx.run(query, 
-            user_id=user_id, 
-            item=data['item'], 
-            amount=data.get('amount', 0), 
-            quantity=data.get('quantity', 1),
-            type=data['type'],
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            is_anomaly=data.get('is_anomaly', False)
-        )
-
-    def create_escrow(self, gig_id, trader_id, worker_id, amount):
-        """Creates a Gig node and links Trader and Worker in an Escrow relationship."""
-        with self._session() as session:
-            query = """
-            MATCH (t:User {id: $trader_id}), (w:User {id: $worker_id})
-            CREATE (g:Gig {id: $gig_id, amount: $amount, status: 'locked', created_at: datetime()})
-            CREATE (t)-[:FUNDED]->(g)
-            CREATE (w)-[:ASSIGNED_TO]->(g)
-            """
-            session.run(query, gig_id=gig_id, trader_id=trader_id, worker_id=worker_id, amount=amount)
-
-    def release_escrow_status(self, gig_id):
-        """Updates Gig status to released and timestamps the payout."""
-        with self._session() as session:
-            query = """
-            MATCH (g:Gig {id: $gig_id})
-            SET g.status = 'released', 
-                g.released_at = datetime()
-            RETURN g.id
-            """
-            session.run(query, gig_id=gig_id)
-
-    def get_gig_details(self, gig_id):
-        """Fetches Gig info to replace your teammate's placeholders."""
-        with self._session() as session:
-            query = """
-            MATCH (w:User)-[:ASSIGNED_TO]->(g:Gig {id: $gig_id})<-[:FUNDED]-(t:User)
-            RETURN g.amount as amount, g.status as status, w.account_number as account_number, 
-                   w.id as worker_id, t.id as trader_id, w.bank_code as bank_code
-            """
-            result = session.run(query, gig_id=gig_id).single()
-            return result.data() if result else None
-
-    def refund_escrow_status(self, gig_id, canceled_by="trader"):
-        """
-        Marks the gig as refunded and records who canceled.
-        """
-        with self._session() as session:
-            query = """
-            MATCH (g:Gig {id: $gig_id})
-            WHERE g.status = 'locked'
-            SET g.status = 'refunded', 
-                g.canceled_by = $canceled_by,
-                g.refunded_at = datetime()
-            RETURN g.id
-            """
-            result = session.run(query, gig_id=gig_id, canceled_by=canceled_by).single()
-            return result is not None
-
-    @staticmethod
-    def get_user_history(tx, user_id):
-        query = """
-        MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction)
-        RETURN t.amount as amount, t.timestamp as timestamp, t.verified as verified, t.is_anomaly as is_anomaly
-        """
-        result = tx.run(query, user_id=user_id)
-        return [record.data() for record in result]
-    
-    def get_history(self, user_id):
-        # execute_read expects a callable; use the available get_user_history function
-        with self._session() as session:
-            return session.execute_read(self.get_user_history, user_id)
-
-    @staticmethod
-    def update_user_score(tx, user_id, score):
-        tx.run("MATCH (u:User {id: $user_id}) SET u.trust_score = $score", 
-               user_id=user_id, score=score)
+            # Automatically update the user's score after new data
+            return self.recalculate_user_score(user_id)
 
     @staticmethod
     def calculate_decayed_score(transactions, half_life_days=14):
-        """The 'Intelligent' part of the economy"""
+        """Calculates a score that weights recent activity higher."""
         if not transactions:
-            return 43 # Starting base score
+            return 43 
 
         total_weighted_points = 0
         lambda_constant = math.log(2) / half_life_days
         now = datetime.now(timezone.utc)
 
         for tx in transactions:
-            tx_time = datetime.fromisoformat(tx['timestamp'])
-            if tx_time.tzinfo is None:
-                tx_time = tx_time.replace(tzinfo=timezone.utc)
-            days_ago = (now - tx_time).total_seconds() / 86400 # Convert to days
-            
-            # Weight based on time (Exponential Decay)
-            weight = math.exp(-lambda_constant * days_ago)
+            try:
+                tx_time = datetime.fromisoformat(tx['timestamp'])
+                if tx_time.tzinfo is None:
+                    tx_time = tx_time.replace(tzinfo=timezone.utc)
+                
+                days_ago = max(0, (now - tx_time).total_seconds() / 86400)
+                weight = math.exp(-lambda_constant * days_ago)
 
-            if tx.get('is_anomaly'):
-                base_points = -20 # Huge penalty for anomalies
-            else:
-                # Points: Verified transactions are 5x more valuable than voice logs alone
-                base_points = 15 if tx['verified'] else 3
-            
-            total_weighted_points += (base_points * weight)
+                if tx.get('is_anomaly'):
+                    base_points = -20
+                else:
+                    # Verified transactions are 5x more powerful
+                    base_points = 15 if tx.get('verified') else 3
 
-        # Logarithmic Scaling: math.log(x, base)
-        # This ensures the score doesn't just grow to 10,000. It curves.
+                total_weighted_points += (base_points * weight)
+            except Exception as e:
+                logger.error(f"Error processing transaction weight: {e}")
+                continue
+
+        # Logarithmic Scaling to cap the growth naturally
         safe_points = max(total_weighted_points, 0)
+        # 40 is the 'floor' for active users
         log_scaled = 40 + (math.log(safe_points + 1, 1.1))
-
         return min(100, round(log_scaled))
-    
-    def update_user_virtual_account(self, user_id, account_number, bank_name):
-        """Saves the Squad virtual account info to the User node."""
-        with self._session() as session:
-            query = """
-            MATCH (u:User {id: $user_id})
-            SET u.virtual_account = $account_number,
-                u.bank_name = $bank_name
-            RETURN u
-            """
-            session.run(query, user_id=user_id, account_number=account_number, bank_name=bank_name)
 
     def recalculate_user_score(self, user_id):
-        """Recalculates the user's score based on all their transactions."""
+        """Refreshes the Trust Score on the User node."""
         with self._session() as session:
-            history = session.execute_read(self.get_user_history, user_id)
+            history = self.get_history(user_id)
             new_score = self.calculate_decayed_score(history)
-            session.execute_write(self.update_user_score, user_id, new_score)
+            
+            session.run(
+                "MATCH (u:User {id: $user_id}) SET u.trust_score = $score", 
+                user_id=user_id, score=new_score
+            )
             return new_score
-    
+
+    # --- Escrow & Gig Management ---
+
+    def create_escrow(self, gig_id, trader_id, worker_id, amount):
+        """Creates a Gig node and links Trader and Worker."""
+        with self._session() as session:
+            query = """
+            MATCH (t:User {id: $trader_id}), (w:User {id: $worker_id})
+            CREATE (g:Gig {
+                id: $gig_id, 
+                amount: $amount, 
+                status: 'locked', 
+                created_at: datetime()
+            })
+            CREATE (t)-[:FUNDED]->(g)
+            CREATE (w)-[:ASSIGNED_TO]->(g)
+            """
+            session.run(query, gig_id=gig_id, trader_id=trader_id, worker_id=worker_id, amount=amount)
+
+    def get_gig_details(self, gig_id):
+        with self._session() as session:
+            query = """
+            MATCH (w:User)-[:ASSIGNED_TO]->(g:Gig {id: $gig_id})<-[:FUNDED]-(t:User)
+            RETURN g.amount as amount, 
+                   g.status as status, 
+                   w.virtual_account as account_number, 
+                   w.id as worker_id, 
+                   t.id as trader_id, 
+                   w.bank_name as bank_name
+            """
+            result = session.run(query, gig_id=gig_id).single()
+            return result.data() if result else None
+
+    # --- Retrieval & Profile Methods ---
+
     def get_user_by_email(self, email: str):
-        """Fetches a user and their hashed password for authentication"""
         with self._session() as session:
             query = """
             MATCH (u:User {email: $email})
@@ -309,89 +218,27 @@ class GraphService:
             """
             result = session.run(query, email=email).single()
             return result.data() if result else None
-    
-    def get_user_by_id(self, user_id: str):
-        """Fetches a user profile by their ID (used by JWT dependency)"""
+
+    def get_history(self, user_id):
         with self._session() as session:
             query = """
-            MATCH (u:User {id: $user_id})
-            RETURN u.id as id, u.name as name, u.email as email, 
-                   u.role as role, u.trust_score as trust_score,
-                   u.city as city, u.state as state, u.country as country
+            MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction)
+            RETURN t.amount as amount, t.timestamp as timestamp, 
+                   t.verified as verified, t.is_anomaly as is_anomaly
             """
-            result = session.run(query, user_id=user_id).single()
-            return result.data() if result else None
+            result = session.run(query, user_id=user_id)
+            return [record.data() for record in result]
 
-    def get_user_dashboard(self, user_id):
-        with self._session() as session:
-            query = """
-            MATCH (u:User {id: $user_id})
-            OPTIONAL MATCH (u)-[:PERFORMED]->(t:Transaction)
-            WITH u, t
-            ORDER BY t.timestamp DESC
-            LIMIT 10
-            RETURN u.name as name, 
-                   u.trust_score as score, 
-                   u.role as role,
-                   u.city as city, u.state as state, u.country as country,
-                   collect({
-                       item: t.item,
-                       amount: t.amount,
-                       type: t.type,
-                       verified: t.verified,
-                       timestamp: t.timestamp
-                   }) as transactions
-            """
-            result = session.run(query, user_id=user_id).single()
-            if not result: return None
-            
-            data = result.data()
-            data['tier'] = self.get_score_tier(data['score'])
-            return data
-
-    @staticmethod
-    def get_score_tier(score):
-        if score >= 90: return {"name": "Elite", "color": "#FFD700", "next": 100}
-        if score >= 75: return {"name": "Established", "color": "#C0C0C0", "next": 90}
-        if score >= 60: return {"name": "Trusted", "color": "#CD7F32", "next": 75}
-        if score >= 45: return {"name": "Growing", "color": "#4CAF50", "next": 60}
-        return {"name": "New", "color": "#2196F3", "next": 45}
-
-    def verify_transaction(self, user_id, amount):
-        """
-        Looks for the most recent unverified SALE matching the Squad payment amount.
+    def get_transaction_by_id(self, tx_id: str) -> dict:
+        query = """
+        MATCH (u:User)-[:PERFORMED]->(t:Transaction {id: $tx_id})
+        RETURN t {.*, user_id: u.id} AS transaction
         """
         with self._session() as session:
-            # We allow a 1% margin for small fee differences
-            query = """
-            MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction {type: 'SALE', verified: false})
-            WHERE t.amount >= $min_amount AND t.amount <= $max_amount
-            WITH t ORDER BY t.timestamp DESC LIMIT 1
-            SET t.verified = true, t.verified_at = datetime()
-            RETURN t.item as item
-            """
-            result = session.run(query, 
-                user_id=user_id, 
-                min_amount=amount * 0.99, 
-                max_amount=amount * 1.01
-            )
-            return result.single()
-
-    def check_if_verified(self, tx_id: str) -> bool:
-        """Checks if a specific transaction is already marked as verified."""
-        with self._session() as session:
-            query = """
-            MATCH (t:Transaction {id: $tx_id})
-            RETURN t.verified as verified
-            """
             result = session.run(query, tx_id=tx_id).single()
-            if result:
-                # result['verified'] might be None or False, return explicit bool
-                return bool(result.get('verified'))
-            return False
-        
+            return result["transaction"] if result else None
+
     def update_transaction_node(self, tx_id: str, data: dict):
-        """Updates an unverified transaction's details."""
         with self._session() as session:
             query = """
             MATCH (t:Transaction {id: $tx_id})
@@ -402,7 +249,6 @@ class GraphService:
                 t.type = $type,
                 t.notes = $notes,
                 t.updated_at = $updated_at
-            RETURN t.id
             """
             session.run(query,
                 tx_id=tx_id,
@@ -415,40 +261,11 @@ class GraphService:
                 updated_at=datetime.now(timezone.utc).isoformat()
             )
 
-    def check_price_anomaly(self, item, unit, amount, quantity):
-        price_per_unit = amount / quantity if quantity else amount
+    def update_user_virtual_account(self, user_id, account_number, bank_name):
         with self._session() as session:
             query = """
-            MATCH (t:Transaction {item: $item, unit: $unit})
-            RETURN avg(t.amount / t.quantity) as avg_price, 
-                   stDev(t.amount / t.quantity) as std_dev
+            MATCH (u:User {id: $user_id})
+            SET u.virtual_account = $account_number,
+                u.bank_name = $bank_name
             """
-            result = session.run(query, item=item, unit=unit).single()
-        
-            if result and result['avg_price']:
-                avg = result['avg_price']
-                # If price is 3x the average, it's a huge anomaly
-                if price_per_unit > (avg * 3):
-                    return True, avg
-        return False, 0
-
-    def get_transaction_by_id(self, tx_id: str) -> dict:
-        """
-        Fetches a transaction and its owner's ID.
-        Returns a dictionary of properties or None if not found.
-        """
-        query = """
-        MATCH (u:User)-[:PERFORMED]->(t:Transaction)
-        WHERE t.id = $tx_id
-        RETURN t {.*, user_id: u.id} AS transaction
-        """
-        try:
-            with self._session() as session:
-                result = session.run(query, tx_id=tx_id).single()
-                if result:
-                    return result["transaction"]
-                return None
-        except Exception as e:
-            # Import logger at the top of your database.py if not already there
-            print(f"Database error in get_transaction_by_id: {e}")
-            return None
+            session.run(query, user_id=user_id, account_number=account_number, bank_name=bank_name)

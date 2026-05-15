@@ -1,42 +1,74 @@
-import easyocr
-import numpy as np
-import cv2
-from PIL import Image
-import io
-from .ai_logic import parse_voice_to_json
+import logging
+import requests
+import os
 from typing import Optional, Dict, Any
+from .ai_logic import parse_voice_to_json
 
-# Initialize the reader once (loading the model into memory)
-# We use 'en' for English. EasyOCR supports 80+ languages!
-reader = easyocr.Reader(['en'], gpu=False) # Set gpu=True if you have one
+logger = logging.getLogger(__name__)
+
+# 🔐 Debug mode: API Key left here as requested, but logic is ready for os.getenv
+OCR_API_KEY = "k81034156488957"
+OCR_URL = "https://api.ocr.space/parse/image"
 
 def process_ledger_image(file_bytes: bytes) -> Optional[Dict[str, Any]]:
     """
-    Extracts text from a photo and converts it to a structured sale.
+    Extracts text from a photo using OCR.space API 
+    and leverages the existing AI parser to structure the data.
     """
     try:
-        image = Image.open(io.BytesIO(file_bytes))
-        image_np = np.array(image)
-        
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+        # Prepare the OCR.space payload
+        # Engine 2 is indeed better for receipts and non-standard text
+        payload = {
+            "apikey": OCR_API_KEY,
+            "language": "eng",
+            "isOverlayRequired": False,
+            "OCREngine": 2,
+            "detectOrientation": True,
+            "scale": True,
+            "isTable": False # Set to True if processing complex tabular ledgers
+        }
 
-        # 1. Run EasyOCR on the image
-        # detail=0 returns just the text strings
-        results = reader.readtext(gray, detail=0, paragraph=True)
+        files = {"file": ("ledger.jpg", file_bytes)}
+
+        response = requests.post(
+            OCR_URL,
+            files=files,
+            data=payload,
+            timeout=30
+        )
         
-        # 2. Combine the detected lines into one block of text
-        raw_text = " ".join(str(text) for text in results)
-        
-        if not raw_text.strip():
-            print("❌ OCR Error: No text found in image")
+        response.raise_for_status()
+        result = response.json()
+
+        # Handle OCR.space internal errors
+        if result.get("IsErroredOnProcessing"):
+            err_msg = result.get("ErrorMessage", "Unknown Error")
+            logger.error(f"❌ OCR API Error: {err_msg}")
             return None
 
-        # 3. Feed the 'messy' OCR text into our existing AI logic
-        # The AI is great at cleaning up OCR typos (e.g., '10k' vs 'l0k')
+        parsed_results = result.get("ParsedResults")
+        if not parsed_results:
+            logger.warning("⚠️ OCR Error: No text could be parsed from this image.")
+            return None
+
+        # Extract detected text
+        raw_text = parsed_results[0].get("ParsedText", "").strip()
+
+        if not raw_text:
+            logger.warning("⚠️ OCR Error: Image was processed but returned empty text.")
+            return None
+
+        logger.info(f"✅ OCR Extracted Text: {raw_text[:100]}...")
+
+        # Re-use the market-intelligent AI logic
+        # This handles the Pidgin/Market talk detected in the image
         structured_data = parse_voice_to_json(raw_text)
-        
+
         return structured_data
-        
+
+    except requests.exceptions.Timeout:
+        logger.error("❌ OCR Service Timeout: API took too long to respond.")
     except Exception as e:
-        print(f"❌ OCR Service Error: {e}")
-        return None
+        logger.error(f"❌ OCR Service Error: {str(e)}")
+        
+    return None

@@ -1,171 +1,161 @@
 import json
 import os
-from typing import Optional, Any, cast, Dict
+import logging
+from typing import Optional, Any, Dict
+from pathlib import Path
 from dotenv import load_dotenv
 
-from pydantic import ValidationError
-from groq import Groq
 import httpx
 import redis
+from groq import Groq
+from pydantic import ValidationError
 
 from models.schemas import VoiceTransaction
 
+# Setup configuration
+load_dotenv()
+logger = logging.getLogger(__name__)
 
+# Constants
+SUPPORTED_AUDIO_FORMATS = {'.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm'}
+DEFAULT_TTL = 3600  # 1 hour
+
+# Global instances
+_groq_client: Optional[Groq] = None
 http_client = httpx.Client()
 
-
-load_dotenv()
-
-
-# Connect to local Redis (default port 6379)
-# decode_responses=True converts bytes to strings automatically
-r = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-
-def update_job_status(job_id: str, status: str, data: Optional[Any] = None):
-    """Helper to update job status in Redis"""
-    job_key = f"job:{job_id}"
-    r.hset(job_key, mapping={"status": status, "data": json.dumps(data) if data else ""})
-    # Set a TTL of 1 hour for cleanup
-    r.expire(job_key, 3600)
-
-
-def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Fetches job data from Redis and parses the JSON string back into a Python object.
-    """
-    job_key = f"job:{job_id}"
-    job = r.hgetall(job_key)
-    # Cast to a concrete dict type for static/type checkers (some redis clients may be awaitable)
-
-    if not job:
-        return None
-
-    # Use Any for values because we will replace the "data" string with a parsed object
-    job = cast(Dict[str, Any], job)
-    data_str = job.get("data", "") or ""
-    if data_str:
-        try:
-            parsed = json.loads(data_str)
-        except json.JSONDecodeError:
-            parsed = {}  # Default to empty dict if parsing fails
-    else:
-        parsed = {}
-
-    job["data"] = parsed
-
-    return job
+# Redis Initialization
+try:
+    r = redis.Redis(
+        host=os.getenv("REDIS_HOST", "localhost"),
+        port=int(os.getenv("REDIS_PORT", 6379)),
+        decode_responses=True
+    )
+    # Test connection
+    r.ping()
+except redis.ConnectionError:
+    logger.error("❌ Redis connection failed. Job tracking will be disabled.")
+    r = None
 
 
 def _get_client() -> Groq:
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY is not set")
-    # Pass an explicit httpx client to avoid incompatible kwargs
-    return Groq(api_key=api_key, http_client=http_client)
+    """Singleton pattern to manage Groq client instance."""
+    global _groq_client
+    if _groq_client is None:
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY is missing from .env")
+        _groq_client = Groq(api_key=api_key, http_client=http_client)
+    return _groq_client
 
+
+# --- Job Management ---
+
+def update_job_status(job_id: str, status: str, data: Optional[Any] = None):
+    """Update job state in Redis with automatic expiry."""
+    if not r: return
+    job_key = f"job:{job_id}"
+    try:
+        mapping = {"status": status, "data": json.dumps(data) if data else ""}
+        r.hset(job_key, mapping=mapping)
+        r.expire(job_key, DEFAULT_TTL)
+    except Exception as e:
+        logger.error(f"Redis update failed: {e}")
+
+
+def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch and parse job data from Redis."""
+    if not r: return None
+    job_key = f"job:{job_id}"
+    
+    job = r.hgetall(job_key)
+    if not job:
+        return None
+
+    data_str = job.get("data")
+    job["data"] = json.loads(data_str) if data_str else {}
+    return job
+
+
+# --- AI Logic ---
 
 def transcribe_audio(file_path: str) -> str:
-    """
-    Uses Groq's Whisper model to turn audio into text.
-    Supports .m4a, .mp3, .wav, etc.
-    """
+    """Uses Groq Whisper-large-v3-turbo for fast English/Pidgin transcription."""
     client = _get_client()
-    
+    path_obj = Path(file_path.strip('"'))
+
+    if path_obj.suffix.lower() not in SUPPORTED_AUDIO_FORMATS:
+        logger.error(f"Unsupported format: {path_obj.suffix}")
+        return ""
+
     try:
-        file_path = file_path.strip('"') or ""
-        if not file_path.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
-            raise Exception("Invalid audio format")
-        with open(file_path, "rb") as file:
+        with open(path_obj, "rb") as audio_file:
+            # We pass the filename specifically to help Groq detect the codec
             transcription = client.audio.transcriptions.create(
-                file=(file_path, file.read()),
-                model="whisper-large-v3-turbo",  # The fastest/newest Whisper model on Groq
-                response_format="text",         # Just get the string back
-                language="en"                   # Forces English to avoid translation glitches
+                file=(path_obj.name, audio_file.read()),
+                model="whisper-large-v3-turbo",
+                response_format="text",
+                language="en"  # "en" works best for Nigerian Pidgin mixed with English
             )
-            return str(transcription)
+            return str(transcription).strip()
     except Exception as e:
-        print(f"❌ Transcription Error: {e}")
+        logger.error(f"Transcription failed: {e}")
         return ""
 
 
-def parse_voice_to_json(transcription_text):
-    """Turn informal market talk into structured transaction data."""
+def parse_voice_to_json(transcription_text: str) -> Optional[Dict[str, Any]]:
+    """Extracts structured financial data from informal transcription."""
+    if not transcription_text:
+        return None
+
     prompt = f"""
-You are an expert Nigerian Market Bookkeeper for the SmartSync platform.
-Your goal is to turn informal market talk (Either English or Nigerian Pidgin) into structured financial data.
+    You are an expert Nigerian Market Bookkeeper for the SmartSync platform.
+    Turn the following informal market talk (English/Pidgin) into valid JSON.
 
-STRICT UNIT CATEGORIZATION:
-Identify the unit of measurement. Common Nigerian units include:
-- "Bag" (e.g., 50kg bag, small bag)
-- "Derica" (Common for rice, beans, garri)
-- "Paint" (Paint bucket/rubber)
-- "Crate" (For eggs)
-- "Kilo/KG" (For meat/frozen foods)
-- "Piece/Unit" (For single items like bread, phone chargers)
-- "Carton" (For noodles, drinks)
+    STRICT UNIT CATEGORIZATION:
+    - Identify units like: "Bag", "Derica", "Paint", "Crate", "Kilo/KG", "Piece", "Carton".
+    - If no unit is found, use "item".
+    - Convert "k" to thousands (e.g., 10k -> 10000).
+    - Default quantity to 1.
+    - Types must be either "SALE" or "EXPENSE".
 
-EXAMPLES:
-User: "I sell one paint of garri for 3500"
-Expected JSON: {{"item": "garri", "amount": 3500.00, "quantity": 1, "unit": "paint", "type": "SALE", "notes": ""}}
+    INPUT: "{transcription_text}"
 
-User: "Buy two derica of rice 2400 naira"
-Expected JSON: {{"item": "rice", "amount": 2400.00, "quantity": 2, "unit": "derica", "type": "EXPENSE", "notes": ""}}
-
-User: "I sell 5 bag of sachet water"
-Expected JSON: {{"item": "sachet water", "amount": 1000.00, "quantity": 5, "unit": "bag", "type": "SALE", "notes": ""}}
-
-PIDGIN CONTEXT EXAMPLES:
-- "I don sell market" -> SALE
-- "I buy market" -> EXPENSE
-- "Customer neva pay" -> SALE (but mark notes as 'Pending')
-- "Waybill money" -> EXPENSE (item: 'Delivery/Waybill')
-- "Dash" -> EXPENSE (item: 'Gift/Discount')
-
-INPUT TO PROCESS:
-"{transcription_text}"
-
-INSTRUCTIONS:
-- Return ONLY valid JSON.
-- if the unit is not mentioned, default to "item".
-- If the user uses 'k', convert it to thousands (e.g., 5k = 5000).
-- Categorize as SALE or EXPENSE.
-- Default quantity to 1 if the speaker does not mention one.
-
-Return ONLY JSON in this format:
-{{"item": str, "amount": float, "quantity": int, "unit": str, "type": "SALE" | "EXPENSE", "notes": str}}
-"""
+    RETURN ONLY JSON:
+    {{
+      "item": string, 
+      "amount": float, 
+      "quantity": integer, 
+      "unit": string, 
+      "type": "SALE" | "EXPENSE", 
+      "notes": string
+    }}
+    """
 
     client = _get_client()
-    chat_completion = client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama-3.3-70b-versatile",
-        response_format={"type": "json_object"},
-    )
-
-    content = chat_completion.choices[0].message.content if chat_completion.choices else ""
-
     try:
-        raw_data = json.loads(content)
-        # VALIDATION HAPPENS HERE:
-        validated_data = VoiceTransaction(**raw_data)
-        return validated_data.model_dump() # Returns a clean, safe dict
-    except (json.JSONDecodeError, ValidationError) as e:
-        print(f"Validation or JSON Error: {e}")
-        # Return a safe default or raise an error for the route to handle
-        return None
-    
-
-def process_voice_entry(audio_file_path: str):
-    """
-    The full pipeline: Audio -> Text -> JSON -> Validated Dict
-    """
-    # 1. Audio to Text
-    raw_text = transcribe_audio(audio_file_path)
-    if not raw_text:
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"},
+        )
+        
+        content = response.choices[0].message.content
+        raw_json = json.loads(content)
+        
+        # Pydantic validation for data integrity
+        validated_data = VoiceTransaction(**raw_json)
+        return validated_data.model_dump()
+        
+    except (json.JSONDecodeError, ValidationError, Exception) as e:
+        logger.error(f"JSON Parsing/Validation Error: {e}")
         return None
 
-    # 2. Text to JSON (using the function we built earlier)
-    structured_data = parse_voice_to_json(raw_text)
+
+def process_voice_entry(audio_file_path: str) -> Optional[Dict[str, Any]]:
+    """Complete pipeline: Audio -> Text -> Structured Dict."""
+    text = transcribe_audio(audio_file_path)
+    if not text:
+        return None
     
-    return structured_data
+    return parse_voice_to_json(text)
