@@ -13,6 +13,5 @@ torchvision
 neo4j
 redis
 numpy
-jose
-python-jose
+python-jose[cryptography]
 passlib

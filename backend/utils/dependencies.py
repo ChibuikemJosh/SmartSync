@@ -7,8 +7,8 @@ from services.database import GraphService
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 db = GraphService()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
+SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:

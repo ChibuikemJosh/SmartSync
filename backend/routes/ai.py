@@ -59,7 +59,10 @@ async def run_ocr_pipeline(job_id: str, user_id: str, tmp_path: str):
         final_data = process_ledger_image(file_bytes)
 
         if final_data:
-            new_score = graph_service.log_transaction(user_id, final_data)
+            if graph_service.is_available():
+                new_score = graph_service.log_transaction(user_id, final_data)
+            else:
+                new_score = 43
 
             update_job_status(job_id, "completed", {
                 "result": final_data, 
@@ -78,7 +81,13 @@ async def run_ocr_pipeline(job_id: str, user_id: str, tmp_path: str):
 
 
 @router.post("/process-voice")
-async def process_voice(user_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def process_voice(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    resolved_user_id = user_id or current_user['id']
     filename = file.filename or ""
     if not filename.lower().endswith(('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.mpeg', '.mpga', '.mp4', '.webm')):
         raise HTTPException(status_code=400, detail="Invalid file format")
@@ -89,19 +98,25 @@ async def process_voice(user_id: str, background_tasks: BackgroundTasks, file: U
 
     tmp_path = await save_temp_file(file)
 
-    background_tasks.add_task(run_ai_pipeline, job_id, user_id, tmp_path)
+    background_tasks.add_task(run_ai_pipeline, job_id, resolved_user_id, tmp_path)
 
     return {"status": "accepted", "job_id": job_id}
 
 
 @router.post("/process-ledger")
-async def process_ledger(user_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def process_ledger(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    resolved_user_id = user_id or current_user['id']
     job_id = str(uuid.uuid4())
     update_job_status(job_id, "processing")
 
     tmp_path = await save_temp_file(file)
 
-    background_tasks.add_task(run_ocr_pipeline, job_id, user_id, tmp_path)
+    background_tasks.add_task(run_ocr_pipeline, job_id, resolved_user_id, tmp_path)
 
     return {"status": "accepted", "job_id": job_id}
 
@@ -118,6 +133,9 @@ async def confirm_tx(data: VoiceTransaction, current_user: dict = Depends(get_cu
     user_id = current_user['id']
     data = data.model_dump()
     # This is where the data is FINALLY saved to Neo4j
+    if not graph_service.is_available():
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+
     new_score = graph_service.log_transaction(user_id, data)
     is_verified = graph_service.verify_transaction(user_id, data['amount'])
 

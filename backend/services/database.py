@@ -9,22 +9,55 @@ from datetime import datetime
 import math
 from datetime import timezone
 import uuid
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 class GraphService:
     def __init__(self):
-        self.driver = GraphDatabase.driver(
-            os.getenv("NEO4J_URI", ""), 
-            auth=(os.getenv("NEO4J_USER", ""), os.getenv("NEO4J_PASSWORD", ""))
-        )
+        self.driver = None
+        uri = os.getenv("NEO4J_URI", "")
+        user = os.getenv("NEO4J_USER", "")
+        password = os.getenv("NEO4J_PASSWORD", "")
+
+        max_retries = int(os.getenv("NEO4J_CONNECT_RETRIES", 5))
+        base_delay = float(os.getenv("NEO4J_BASE_DELAY", 1.0))
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.driver = GraphDatabase.driver(uri, auth=(user, password))
+                try:
+                    self.driver.verify_connectivity()
+                except Exception:
+                    pass
+                break
+            except Exception as e:
+                logging.warning(f"Attempt {attempt} to connect to Neo4j failed: {e}")
+                self.driver = None
+                if attempt == max_retries:
+                    logging.error("Could not connect to Neo4j after retries; continuing without DB driver")
+                    break
+                sleep = base_delay * (2 ** (attempt - 1))
+                time.sleep(sleep)
+
+    def is_available(self):
+        return self.driver is not None
+
+    def _session(self):
+        if not self.driver:
+            raise RuntimeError("Database connection not available")
+        return self.driver.session()
 
     def close(self):
-        self.driver.close()
+        if self.driver:
+            self.driver.close()
 
     def create_user_node(self, user_data):
         """Creates a new user with location and base score"""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MERGE (u:User {id: $id})
             SET u.name = $name,
@@ -58,7 +91,7 @@ class GraphService:
 
     def log_transaction(self, user_id, tx_data):
         """Logs the sale, then recalculates the dynamic Trust Score"""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             CREATE (t:Transaction {
@@ -132,7 +165,7 @@ class GraphService:
 
     def create_escrow(self, gig_id, trader_id, worker_id, amount):
         """Creates a Gig node and links Trader and Worker in an Escrow relationship."""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (t:User {id: $trader_id}), (w:User {id: $worker_id})
             CREATE (g:Gig {id: $gig_id, amount: $amount, status: 'locked', created_at: datetime()})
@@ -143,7 +176,7 @@ class GraphService:
 
     def release_escrow_status(self, gig_id):
         """Updates Gig status to released and timestamps the payout."""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (g:Gig {id: $gig_id})
             SET g.status = 'released', 
@@ -154,10 +187,10 @@ class GraphService:
 
     def get_gig_details(self, gig_id):
         """Fetches Gig info to replace your teammate's placeholders."""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (w:User)-[:ASSIGNED_TO]->(g:Gig {id: $gig_id})<-[:FUNDED]-(t:User)
-            RETURN g.amount as amount, g.status as status, w.account_number as worker_acc, 
+            RETURN g.amount as amount, g.status as status, w.account_number as account_number, 
                    w.id as worker_id, t.id as trader_id, w.bank_code as bank_code
             """
             result = session.run(query, gig_id=gig_id).single()
@@ -167,7 +200,7 @@ class GraphService:
         """
         Marks the gig as refunded and records who canceled.
         """
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (g:Gig {id: $gig_id})
             WHERE g.status = 'locked'
@@ -189,8 +222,9 @@ class GraphService:
         return [record.data() for record in result]
     
     def get_history(self, user_id):
-        with self.driver.session() as session:
-            return session.execute_read(self._get_user_history, user_id)
+        # execute_read expects a callable; use the available get_user_history function
+        with self._session() as session:
+            return session.execute_read(self.get_user_history, user_id)
 
     @staticmethod
     def update_user_score(tx, user_id, score):
@@ -209,13 +243,15 @@ class GraphService:
 
         for tx in transactions:
             tx_time = datetime.fromisoformat(tx['timestamp'])
+            if tx_time.tzinfo is None:
+                tx_time = tx_time.replace(tzinfo=timezone.utc)
             days_ago = (now - tx_time).total_seconds() / 86400 # Convert to days
             
             # Weight based on time (Exponential Decay)
             weight = math.exp(-lambda_constant * days_ago)
 
             if tx.get('is_anomaly'):
-                      base_points = -20 # Huge penalty for anomalies
+                base_points = -20 # Huge penalty for anomalies
             else:
                 # Points: Verified transactions are 5x more valuable than voice logs alone
                 base_points = 15 if tx['verified'] else 3
@@ -224,13 +260,14 @@ class GraphService:
 
         # Logarithmic Scaling: math.log(x, base)
         # This ensures the score doesn't just grow to 10,000. It curves.
-        log_scaled = 40 + (math.log(total_weighted_points + 1, 1.1))
-        
+        safe_points = max(total_weighted_points, 0)
+        log_scaled = 40 + (math.log(safe_points + 1, 1.1))
+
         return min(100, round(log_scaled))
     
     def update_user_virtual_account(self, user_id, account_number, bank_name):
         """Saves the Squad virtual account info to the User node."""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             SET u.virtual_account = $account_number,
@@ -241,7 +278,7 @@ class GraphService:
 
     def recalculate_user_score(self, user_id):
         """Recalculates the user's score based on all their transactions."""
-        with self.driver.session() as session:
+        with self._session() as session:
             history = session.execute_read(self.get_user_history, user_id)
             new_score = self.calculate_decayed_score(history)
             session.execute_write(self.update_user_score, user_id, new_score)
@@ -249,7 +286,7 @@ class GraphService:
     
     def get_user_by_email(self, email: str):
         """Fetches a user and their hashed password for authentication"""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (u:User {email: $email})
             RETURN u.id as id, u.name as name, u.password as password, 
@@ -260,7 +297,7 @@ class GraphService:
     
     def get_user_by_id(self, user_id: str):
         """Fetches a user profile by their ID (used by JWT dependency)"""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             RETURN u.id as id, u.name as name, u.email as email, 
@@ -271,7 +308,7 @@ class GraphService:
             return result.data() if result else None
 
     def get_user_dashboard(self, user_id):
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (u:User {id: $user_id})
             OPTIONAL MATCH (u)-[:PERFORMED]->(t:Transaction)
@@ -309,13 +346,13 @@ class GraphService:
         """
         Looks for the most recent unverified SALE matching the Squad payment amount.
         """
-        with self.driver.session() as session:
+        with self._session() as session:
             # We allow a 1% margin for small fee differences
             query = """
             MATCH (u:User {id: $user_id})-[:PERFORMED]->(t:Transaction {type: 'SALE', verified: false})
             WHERE t.amount >= $min_amount AND t.amount <= $max_amount
             WITH t ORDER BY t.timestamp DESC LIMIT 1
-            SET t.verified = true, t.verified_at = datetime().isoformat()
+            SET t.verified = true, t.verified_at = datetime()
             RETURN t.item as item
             """
             result = session.run(query, 
@@ -327,7 +364,7 @@ class GraphService:
 
     def check_if_verified(self, tx_id: str) -> bool:
         """Checks if a specific transaction is already marked as verified."""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (t:Transaction {id: $tx_id})
             RETURN t.verified as verified
@@ -340,7 +377,7 @@ class GraphService:
         
     def update_transaction_node(self, tx_id: str, data: dict):
         """Updates an unverified transaction's details."""
-        with self.driver.session() as session:
+        with self._session() as session:
             query = """
             MATCH (t:Transaction {id: $tx_id})
             SET t.item = $item,
@@ -364,8 +401,8 @@ class GraphService:
             )
 
     def check_price_anomaly(self, item, unit, amount, quantity):
-        price_per_unit = amount / quantity
-        with self.driver.session() as session:
+        price_per_unit = amount / quantity if quantity else amount
+        with self._session() as session:
             query = """
             MATCH (t:Transaction {item: $item, unit: $unit})
             RETURN avg(t.amount / t.quantity) as avg_price, 

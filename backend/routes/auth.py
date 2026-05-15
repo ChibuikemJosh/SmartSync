@@ -8,16 +8,22 @@ from services.database import GraphService
 from services.auth_logic import hash_password, verify_password, create_access_token
 
 router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 db = GraphService()
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
+SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+
+def _ensure_db_available():
+    if not db.is_available():
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
 
 @router.post("/register", response_model=UserProfile)
 async def register_user(user: UserCreate):
+    _ensure_db_available()
     
     if db.get_user_by_email(user.email):
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -47,15 +53,27 @@ async def register_user(user: UserCreate):
 
 @router.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = db.get_user_by_email(form_data.username)
-    if not user or not verify_password(form_data.password, user['password']):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    access_token = create_access_token(data={"sub": user['id']})
-    return {"access_token": access_token, "token_type": "bearer"}
+    try:
+        _ensure_db_available()
+        user = db.get_user_by_email(form_data.username)
+        if not user or not verify_password(form_data.password, user['password']):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        access_token = create_access_token(data={"sub": user['id']})
+        return {"access_token": access_token, "token_type": "bearer"}
+    except HTTPException:
+        # Re-raise known HTTP exceptions
+        raise
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print("[AUTH LOGIN ERROR]", str(e))
+        print(tb)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
+        _ensure_db_available()
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
@@ -66,3 +84,20 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@router.get("/me", response_model=UserProfile)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return UserProfile(
+        id=current_user["id"],
+        name=current_user.get("name", "User"),
+        email=current_user.get("email", ""),
+        role=current_user.get("role", "Trader"),
+        location={
+            "city": current_user.get("city", "Unknown"),
+            "state": current_user.get("state", "Unknown"),
+            "country": current_user.get("country", "Nigeria"),
+        },
+        trust_score=current_user.get("trust_score", 43),
+        tier=TierInfo(name="New", color="#2196F3", next_milestone=45),
+    )

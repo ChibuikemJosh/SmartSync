@@ -16,7 +16,7 @@ def seed_everything():
             "id": "user_pro_001",
             "name": "Alhaji Musa",
             "email": "musa@market.com",
-            "role": "trader",
+            "role": "Trader",
             "score": 85,
             "city": "Kano"
         },
@@ -24,7 +24,7 @@ def seed_everything():
             "id": "user_new_002",
             "name": "Blessing Okon",
             "email": "blessing@market.com",
-            "role": "trader",
+            "role": "Trader",
             "score": 43,
             "city": "Lagos"
         },
@@ -32,11 +32,15 @@ def seed_everything():
             "id": "worker_001",
             "name": "Sunday Delivery",
             "email": "sunday@logistic.com",
-            "role": "worker",
+            "role": "Worker",
             "score": 70,
             "city": "Lagos"
         }
     ]
+
+    if not db.is_available():
+        print("⚠️ Neo4j is unavailable, skipping seed data")
+        return
 
     for u in demo_users:
         db.create_user_node({

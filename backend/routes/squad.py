@@ -30,7 +30,11 @@ from utils.dependencies import get_current_user
 
 try:
     graph = GraphService()
-    print("✅ Neo4j connected successfully")
+    if graph.is_available():
+        print("✅ Neo4j connected successfully")
+    else:
+        graph = None
+        print("⚠️ Neo4j connection unavailable — Squad endpoints will still work")
 except Exception as e:
     graph = None
     print(f"⚠️ Neo4j connection failed: {e} — Squad endpoints will still work")
@@ -50,6 +54,11 @@ def get_headers():
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json"
     }
+
+
+def _require_graph():
+    if not graph or not graph.is_available():
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
 
 # ─── 1. CREATE VIRTUAL ACCOUNT ───────────────────────────────
 @router.post("/create-virtual-account")
@@ -287,6 +296,7 @@ async def lock_escrow(request: EscrowRequest):
 @router.post("/escrow/release/{gig_id}")
 async def release_escrow(gig_id: str):
     try:
+        _require_graph()
         logger.info(f"Releasing escrow for gig {gig_id}")
 
         gig = graph.get_gig_details(gig_id)
@@ -301,7 +311,7 @@ async def release_escrow(gig_id: str):
         trader_id = gig["trader_id"]
         amount = gig["amount"]
         bank_code = gig["bank_code"]
-        worker_account = gig["account_number"]
+        worker_account = gig.get("account_number")
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -329,7 +339,7 @@ async def release_escrow(gig_id: str):
             raise HTTPException(status_code=400, detail=data.get("message", "Payout failed"))
 
         # Update Trust Score for both trader and worker after gig completes
-        if graph:
+        if graph.is_available():
             graph.log_transaction(
                 user_id=worker_id,
                 tx_data={
@@ -364,6 +374,7 @@ async def cancel_gig(gig_id: str, initiator: str = "trader", reason: str = "Chan
     """
     initiator can be 'trader' or 'worker'
     """
+    _require_graph()
     gig = graph.get_gig_details(gig_id)
     if not gig or gig['status'] != 'locked':
         raise HTTPException(status_code=400, detail="Invalid gig status for cancellation")

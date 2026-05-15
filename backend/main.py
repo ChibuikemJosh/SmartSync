@@ -9,6 +9,7 @@ from routes.squad import router as squad_router
 from routes.health import router as health_router
 import uvicorn
 from services.database import GraphService
+import os
 
 # Import your routes
 from routes import ai, auth, chat, health, squad, transactions
@@ -46,4 +47,7 @@ async def root():
     }
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    reload_env = os.getenv("RELOAD", "True").lower() in ("true", "1", "yes")
+    uvicorn.run("main:app", host=host, port=port, reload=reload_env)

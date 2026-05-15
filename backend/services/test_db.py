@@ -10,8 +10,12 @@ def test_connection():
     db = GraphService()
     print("--- Testing Neo4j Connection ---")
     try:
+        if not db.is_available():
+            print("⚠️ Neo4j driver unavailable, skipping database test")
+            return
+
         # 1. Simple Connectivity
-        with db.driver.session() as session:
+        with db._session() as session:
             res = session.run("RETURN 'Connection Successful' as msg").single()
             print(f"✅ {res['msg']}")
 

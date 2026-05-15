@@ -30,11 +30,16 @@ class VoiceTransaction(BaseModel):
                     return result
                 except ValueError:
                     return 0.0 # Default to 0.0 if we can't parse it
-        
+
+            try:
+                return float(clean_v)
+            except ValueError:
+                return float(v) if v else 0.0
+
         try:
-            return float(clean_v)
-        except ValueError:
-            return float(v) if v else 0.0
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
             
     @validator('quantity', pre=True)
     def ensure_int_quantity(cls, v):
