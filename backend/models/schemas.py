@@ -1,22 +1,25 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import List, Optional, Any, Dict
 import re
 
 # --- Shared Utilities ---
 def clean_numeric_string(v: str) -> str:
     """Helper to strip currency symbols and common separators."""
-    return v.upper().replace("NGN", "").replace("NAIRA", "").replace(",", "").strip()
+    if not isinstance(v, str): return str(v)
+    return v.upper().replace("NGN", "").replace("NAIRA", "").replace("₦", "").replace(",", "").strip()
 
 # --- Models ---
 
 class VoiceTransaction(BaseModel):
+    model_config = ConfigDict(from_attributes=True) # Allows Pydantic to read Neo4j dicts
+
     item: str = Field(..., description="The name of the item sold or expense incurred")
     amount: float = Field(..., gt=0, description="The cost in Naira (must be positive)")
     quantity: int = Field(default=1)
     unit: str = Field(default="item", description="The unit of the item (e.g., 'kg', 'piece')")
     type: str = Field(..., pattern="^(SALE|EXPENSE|CREDIT|DEBIT|GIG_COMPLETE|GIG_CONFIRMED)$")
-    timestamp: str | None = None
-    notes: str | None = "No additional notes"
+    timestamp: Optional[str] = None
+    notes: Optional[str] = "No additional notes"
     verified: bool = False
     is_anomaly: bool = False
 
@@ -25,12 +28,17 @@ class VoiceTransaction(BaseModel):
     def parse_amount(cls, v: Any) -> float:
         if isinstance(v, str):
             clean_v = clean_numeric_string(v)
-            clean_v = re.sub(r'[^\d\.K]', '', clean_v)
+            # Handle "5k" or "10K" shorthand
             if 'K' in clean_v:
                 try:
-                    return float(clean_v.replace("K", "")) * 1000
-                except ValueError:
+                    # Remove 'K' and any non-numeric leftover, then multiply
+                    num_part = re.sub(r'[^\d\.]', '', clean_v.split('K')[0])
+                    return float(num_part) * 1000
+                except (ValueError, IndexError):
                     return 0.0
+            
+            # Standard numeric cleanup
+            clean_v = re.sub(r'[^\d\.]', '', clean_v)
             try:
                 return float(clean_v)
             except ValueError:
@@ -45,40 +53,37 @@ class VoiceTransaction(BaseModel):
                 # Extracts the first number found in a string like "5 bags"
                 match = re.search(r"[-+]?\d*\.\d+|\d+", v)
                 return int(float(match.group())) if match else 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 return 1
         return int(v) if v is not None else 1
 
+# --- Communication Models ---
 
 class ChatRequest(BaseModel):
-    """New model for handling combined text and voice inputs."""
-    message: str | None = None
-    voice_path: str | None = None
-
+    message: Optional[str] = None
+    voice_path: Optional[str] = None
 
 class VoiceProcessResponse(BaseModel):
     status: str
-    transaction: VoiceTransaction | None = None
-    message: str | None = None
-
+    transaction: Optional[VoiceTransaction] = None
+    message: Optional[str] = None
 
 class OCRProcessResponse(BaseModel):
     status: str
     extracted_data: Dict[str, Any]
     image_text: str
 
+# --- User & Profile Models ---
 
 class LocationSchema(BaseModel):
     city: str
     state: str
-    country: str
-
+    country: str = "Nigeria"
 
 class TierInfo(BaseModel):
-    name: str
-    color: str
-    next_milestone: int
-
+    name: str = "Bronze"
+    color: str = "#CD7F32"
+    next_milestone: int = 100
 
 class UserCreate(BaseModel):
     id: str
@@ -88,58 +93,43 @@ class UserCreate(BaseModel):
     role: str = Field(..., pattern="^(Trader|Worker|Both)$")
     location: LocationSchema
 
-
 class UserProfile(BaseModel):
-    id: str = Field(..., description="Unique ID")
+    id: str
     name: str
     email: str
-    role: str = Field(..., pattern="^(Trader|Worker|Both)$")
+    role: str
     location: LocationSchema
     trust_score: int = 43
-    tier: TierInfo
+    tier: TierInfo = Field(default_factory=TierInfo)
     skills: List[str] = []
-
 
 class DashboardResponse(BaseModel):
     profile: UserProfile
     recent_transactions: List[VoiceTransaction]
-
 
 # --- Squad/Financial Models ---
 
 class VirtualAccountRequest(BaseModel):
     merchant_id: str
     business_name: str
-    first_name: str | None = None
-    last_name: str | None = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: str
     phone: str
 
     @field_validator('phone')
     @classmethod
     def validate_nigerian_phone(cls, v: str) -> str:
+        # Standardizes: +234..., 080..., 070...
+        clean_phone = re.sub(r'\s+|-', '', v)
         pattern = r'^(\+234|0)[789][01]\d{8}$'
-        if not re.match(pattern, v):
-            raise ValueError('Invalid Nigerian phone number format')
-        return v.strip()
-
-
-class PaymentLinkRequest(BaseModel):
-    merchant_id: str
-    amount: float
-    transaction_id: str
-    description: str
-    customer_email: str | None = None
-
+        if not re.match(pattern, clean_phone):
+            raise ValueError('Use a valid Nigerian phone number (e.g., 08012345678)')
+        return clean_phone
 
 class WithdrawalRequest(BaseModel):
     user_id: str
-    amount: float
+    amount: float = Field(..., gt=0)
     bank_code: str
-    account_number: str
-    narration: str | None = "SmartSync withdrawal"
-
-class EscrowRequest(BaseModel):
-    user_id: str
-    amount: float
-    description: str
+    account_number: str = Field(..., min_length=10, max_length=10)
+    narration: Optional[str] = "SmartSync withdrawal"
