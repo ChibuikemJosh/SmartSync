@@ -25,10 +25,10 @@ COPY backend/requirements.txt /app/requirements.txt
 
 # Upgrade pip and install Python deps
 RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source
-COPY backend /app
+COPY .
 
 # Expose port (Render will set PORT env; default to 8000)
 EXPOSE 8000
