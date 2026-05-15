@@ -269,3 +269,18 @@ class GraphService:
                 u.bank_name = $bank_name
             """
             session.run(query, user_id=user_id, account_number=account_number, bank_name=bank_name)
+
+    def get_user_by_id(self, user_id: str):
+        """Used by the Auth Dependency to validate users."""
+        with self._session() as session:
+            query = """
+            MATCH (u:User {id: $id})
+            RETURN u {.*} AS user
+            """
+            result = session.run(query, id=user_id).single()
+            if not result: return None
+            
+            user = result["user"]
+            # Neo4j integers need explicit casting for Pydantic
+            user['trust_score'] = int(user.get('trust_score', 43))
+            return user

@@ -133,3 +133,9 @@ class WithdrawalRequest(BaseModel):
     bank_code: str
     account_number: str = Field(..., min_length=10, max_length=10)
     narration: Optional[str] = "SmartSync withdrawal"
+
+
+class PaymentLinkRequest(BaseModel):
+    user_id: str
+    amount: float = Field(..., gt=0)
+    description: Optional[str] = "Payment for goods/services"

@@ -109,19 +109,15 @@ def parse_voice_to_json(transcription_text: str) -> Optional[Dict[str, Any]]:
         return None
 
     prompt = f"""
-    You are an expert Nigerian Market Bookkeeper for the SmartSync platform.
-    Turn the following informal market talk (English/Pidgin) into valid JSON.
-
-    STRICT UNIT CATEGORIZATION:
-    - Identify units like: "Bag", "Derica", "Paint", "Crate", "Kilo/KG", "Piece", "Carton".
-    - If no unit is found, use "item".
-    - Convert "k" to thousands (e.g., 10k -> 10000).
-    - Default quantity to 1.
-    - Types must be either "SALE" or "EXPENSE".
-
-    INPUT: "{transcription_text}"
-
-    RETURN ONLY JSON:
+    You are a SmartSync Bookkeeper. Extract data from this Nigerian market talk: "{transcription_text}"
+    
+    RULES:
+    1. 'K' suffix means thousands (e.g., 5k = 5000).
+    2. Units: Bag, Paint, Derica, Crate, KG, Piece, Carton. Default: 'item'.
+    3. Types: 'SALE' (money in) or 'EXPENSE' (money out).
+    4. If the speaker mentions a customer name, add it to 'notes'.
+    
+    RETURN ONLY RAW JSON:
     {{
       "item": string, 
       "amount": float, 
