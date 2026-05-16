@@ -110,7 +110,6 @@ class DashboardResponse(BaseModel):
 # --- Squad/Financial Models ---
 
 class VirtualAccountRequest(BaseModel):
-    merchant_id: str
     business_name: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
