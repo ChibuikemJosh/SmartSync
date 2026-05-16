@@ -24,10 +24,7 @@ const initialMessages = [
   },
 ];
 
-const initialActivities = [
-  { id: '1', item: 'Tomatoes', amount: 12500, type: 'SALE', verified: true, timestamp: 'Today' },
-  { id: '2', item: 'Transport', amount: 3000, type: 'EXPENSE', verified: true, timestamp: 'Today' },
-];
+const initialActivities = [];
 
 function normalizeProfile(profile) {
   const tierName = profile?.tier?.name || profile?.tierName || 'New';
@@ -51,8 +48,15 @@ export function AppProvider({ children }) {
   const [activities, setActivities] = useState(initialActivities);
   const [voiceOverlayOpen, setVoiceOverlayOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ amount: '', transactionId: '', description: '' });
+  const [paymentForm, setPaymentForm] = useState({ amount: '', email: '', description: '' });
   const [withdrawForm, setWithdrawForm] = useState({ amount: '', bankCode: '', accountNumber: '' });
+  const [loadingIndicator, setLoadingIndicator] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     let active = true;
@@ -95,6 +99,8 @@ export function AppProvider({ children }) {
     window.__smartsyncToastTimer = window.setTimeout(() => setToast(null), 2600);
   };
 
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+
   const login = async (email, password) => {
     setLoading(true);
     try {
@@ -108,6 +114,12 @@ export function AppProvider({ children }) {
       try {
         const me = await fetchMeRequest();
         setProfile(normalizeProfile(me));
+        // background create VA if missing
+        setTimeout(() => {
+          if (me && (!wallet.accountNumber || wallet.accountNumber === '')) {
+            createVirtualAccount().catch((e) => console.log('VA auto-create error', e));
+          }
+        }, 1000);
       } catch (profileError) {
         console.log('DEBUG: profile hydration skipped after login', profileError);
         setProfile((current) => current || { id: '', name: trimmedEmail, email: trimmedEmail, trustScore: 43, tierName: 'New' });
@@ -141,6 +153,11 @@ export function AppProvider({ children }) {
       await registerRequest(payload);
       showToast('Created account successfully!', 'amber');
       const success = await login(payload.email, payload.password);
+      if (success) {
+        setTimeout(() => {
+          createVirtualAccount().catch((e) => console.log('VA auto-create error', e));
+        }, 1200);
+      }
       return success;
     } catch (error) {
       console.log('DEBUG: register error', error);
@@ -192,24 +209,33 @@ export function AppProvider({ children }) {
   const confirmReview = async (payload) => {
     setLoading(true);
     try {
-      const response = await confirmTransactionRequest(payload);
+      const body = {
+        item: String(payload.item || ''),
+        amount: Number(payload.amount || 0),
+        quantity: parseInt(payload.quantity || 1, 10),
+        unit: String(payload.unit || 'item'),
+        type: String(payload.type || 'SALE'),
+        notes: String(payload.notes || ''),
+      };
+
+      const response = await confirmTransactionRequest(body);
       setActivities((current) => [
         {
           id: `${Date.now()}`,
-          item: payload.item,
-          amount: payload.amount,
-          type: payload.type,
+          item: body.item,
+          amount: body.amount,
+          type: body.type,
           verified: response.verified,
           timestamp: 'Now',
         },
         ...current,
       ]);
       setReviewState({ open: false, transaction: null, jobId: null });
-      showToast(`Trust score updated to ${response.new_score}`, 'amber');
+      showToast(`Credit score updated to ${response.new_score}`, 'amber');
       return response;
     } catch (error) {
       console.log('DEBUG: confirm transaction error', error);
-      window.alert('Could not log transaction.');
+      window.alert('Could not log transaction. ' + (error?.message || ''));
       return null;
     } finally {
       setLoading(false);
@@ -243,11 +269,10 @@ export function AppProvider({ children }) {
   };
 
   const createVirtualAccount = async () => {
-    if (!profile) return;
+    if (!profile) return null;
     setLoading(true);
     try {
       const response = await createVirtualAccountRequest({
-        merchant_id: profile.id,
         business_name: profile.name || 'SmartSync Merchant',
         email: profile.email,
         phone: '08000000000',
@@ -261,7 +286,7 @@ export function AppProvider({ children }) {
       return response;
     } catch (error) {
       console.log('DEBUG: create virtual account error', error);
-      window.alert('Could not create virtual account.');
+      window.alert('Could not create virtual account. ' + (error?.message || ''));
       return null;
     } finally {
       setLoading(false);
@@ -269,24 +294,20 @@ export function AppProvider({ children }) {
   };
 
   const generatePaymentLink = async () => {
-    if (!profile) return;
+    if (!profile) return null;
     setLoading(true);
     try {
       const response = await generatePaymentLinkRequest({
-        user_id: profile.id,
-        merchant_id: profile.id,
         amount: Number(paymentForm.amount || 0),
-        transaction_id: paymentForm.transactionId || `${Date.now()}`,
-        description: paymentForm.description || 'Payment for goods/services',
-        email: profile.email,
+        email: paymentForm.email || profile.email,
+        description: paymentForm.description || '',
       });
-      window.open(response.checkout_url, '_blank', 'noopener,noreferrer');
-      showToast('Payment link opened', 'amber');
       setPaymentModalOpen(false);
+      showToast('Payment link generated', 'forest');
       return response;
     } catch (error) {
-      console.log('DEBUG: payment link error', error);
-      window.alert('Could not create payment link.');
+      console.log('DEBUG: generate payment link error', error);
+      window.alert('Could not generate payment link. ' + (error?.message || ''));
       return null;
     } finally {
       setLoading(false);
@@ -294,11 +315,9 @@ export function AppProvider({ children }) {
   };
 
   const withdraw = async () => {
-    if (!profile) return;
     setLoading(true);
     try {
       const response = await withdrawRequest({
-        user_id: profile.id,
         amount: Number(withdrawForm.amount || 0),
         bank_code: withdrawForm.bankCode,
         account_number: withdrawForm.accountNumber,
@@ -314,41 +333,6 @@ export function AppProvider({ children }) {
     }
   };
 
-  const sendChat = async (message, voicePath = null) => {
-    const safeMessage = message.trim();
-    if (!safeMessage && !voicePath) return;
-
-    const userBubble = {
-      id: `${Date.now()}-user`,
-      sender: 'user',
-      text: safeMessage || 'Voice note sent',
-      time: 'Now',
-    };
-    setChatMessages((current) => [...current, userBubble]);
-
-    try {
-      const response = await chatRequest({ message: safeMessage, voice_path: voicePath });
-      const botBubble = {
-        id: `${Date.now()}-bot`,
-        sender: 'bot',
-        text: response.answer || 'No worry, I no see result yet.',
-        time: 'Now',
-      };
-      setChatMessages((current) => [...current, botBubble]);
-      return response;
-    } catch (error) {
-      console.log('DEBUG: chat error', error);
-      const botBubble = {
-        id: `${Date.now()}-bot`,
-        sender: 'bot',
-        text: 'E get error for backend, but I still dey with you.',
-        time: 'Now',
-      };
-      setChatMessages((current) => [...current, botBubble]);
-      return null;
-    }
-  };
-
   const value = useMemo(
     () => ({
       initialized,
@@ -356,18 +340,23 @@ export function AppProvider({ children }) {
       token,
       profile,
       toast,
+      theme,
+      toggleTheme,
       reviewState,
       wallet,
       chatMessages,
       activities,
       voiceOverlayOpen,
-      setVoiceOverlayOpen,
       paymentModalOpen,
-      setPaymentModalOpen,
       paymentForm,
-      setPaymentForm,
       withdrawForm,
+      setPaymentForm,
       setWithdrawForm,
+      setVoiceOverlayOpen,
+      setPaymentModalOpen,
+      setActivities,
+      setProfile,
+      setToast,
       login,
       register,
       logout,
@@ -378,33 +367,30 @@ export function AppProvider({ children }) {
       createVirtualAccount,
       generatePaymentLink,
       withdraw,
-      sendChat,
-      setReviewState,
+      loadingIndicator,
+      setLoadingIndicator,
+      updateProfile: (updates) => {
+        setProfile((cur) => normalizeProfile({ ...cur, ...updates }));
+        showToast('Profile updated', 'forest');
+      },
     }),
     [
-      activities,
-      chatMessages,
-      confirmReview,
-      createVirtualAccount,
-      generatePaymentLink,
       initialized,
       loading,
-      login,
-      logout,
-      paymentForm,
-      paymentModalOpen,
-      profile,
-      register,
-      reviewState,
-      sendChat,
-      setVoiceOverlayOpen,
-      toast,
       token,
-      voiceOverlayOpen,
+      profile,
+      toast,
+      theme,
+      reviewState,
       wallet,
-      withdraw,
+      chatMessages,
+      activities,
+      voiceOverlayOpen,
+      paymentModalOpen,
+      paymentForm,
       withdrawForm,
-    ],
+      loadingIndicator,
+    ]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -10,6 +10,7 @@ export default function AuthScreen() {
   const [form, setForm] = useState({
     email: '',
     password: '',
+    confirmPassword: '',
     name: '',
     city: 'Lagos',
     state: 'Lagos',
@@ -36,6 +37,11 @@ export default function AuthScreen() {
         country: 'Nigeria',
       },
     };
+
+    if (form.password !== form.confirmPassword) {
+      window.alert('Passwords do not match, check am again!');
+      return;
+    }
 
     await register(userData);
   };
@@ -107,6 +113,16 @@ export default function AuthScreen() {
             value={form.email}
             onChange={(e) => update('email', e.target.value)}
           />
+
+          {!isLoginView && (
+            <input
+              className="w-full rounded-2xl border border-slate-200 bg-[#F8F9FA] px-4 py-3 text-sm"
+              placeholder="Confirm Password"
+              type={showPassword ? 'text' : 'password'}
+              value={form.confirmPassword}
+              onChange={(e) => update('confirmPassword', e.target.value)}
+            />
+          )}
 
           <div className="relative">
             <input

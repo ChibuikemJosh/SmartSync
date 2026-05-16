@@ -5,6 +5,13 @@ import { useApp } from '../context/AppContext';
 export default function WalletScreen() {
   const { wallet, createVirtualAccount, withdraw, withdrawForm, setWithdrawForm, loading } = useApp();
 
+  const banks = [
+    { name: 'GTBank', code: '058' },
+    { name: 'Access Bank', code: '044' },
+    { name: 'Zenith Bank', code: '057' },
+    { name: 'First Bank', code: '011' },
+  ];
+
   return (
     <div className="min-h-screen px-4 pb-6 pt-4">
       <p className="text-xs font-bold uppercase tracking-[0.3em] text-forest">Financial Toolkit</p>
@@ -34,7 +41,12 @@ export default function WalletScreen() {
         <h3 className="mt-1 text-xl font-black text-slate-900">Quick Payout</h3>
         <div className="mt-4 space-y-3">
           <input className="w-full rounded-2xl border border-slate-200 bg-[#F8F9FA] px-4 py-3 text-sm" placeholder="Amount" value={withdrawForm.amount} onChange={(e) => setWithdrawForm((current) => ({ ...current, amount: e.target.value }))} />
-          <input className="w-full rounded-2xl border border-slate-200 bg-[#F8F9FA] px-4 py-3 text-sm" placeholder="Bank Code" value={withdrawForm.bankCode} onChange={(e) => setWithdrawForm((current) => ({ ...current, bankCode: e.target.value }))} />
+          <select className="w-full rounded-2xl border border-slate-200 bg-[#F8F9FA] px-4 py-3 text-sm" value={withdrawForm.bankCode} onChange={(e) => setWithdrawForm((current) => ({ ...current, bankCode: e.target.value }))}>
+            <option value="">Select Bank</option>
+            {banks.map((b) => (
+              <option key={b.code} value={b.code}>{b.name}</option>
+            ))}
+          </select>
           <input className="w-full rounded-2xl border border-slate-200 bg-[#F8F9FA] px-4 py-3 text-sm" placeholder="Account Number" value={withdrawForm.accountNumber} onChange={(e) => setWithdrawForm((current) => ({ ...current, accountNumber: e.target.value }))} />
           <LoadingButton isLoading={loading} onClick={withdraw} className="w-full bg-forest text-white">Withdraw Funds</LoadingButton>
         </div>
