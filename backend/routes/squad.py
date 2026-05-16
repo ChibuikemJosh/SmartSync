@@ -77,7 +77,7 @@ async def create_virtual_account(
         "dob": SQUAD_TEST_DOB,
         "address": SQUAD_TEST_ADDRESS,
         "gender": SQUAD_TEST_GENDER,
-        "customer_identifier": user_id,
+        "customer_identifier": str(user_id).replace("-", "")[:50],
         "beneficiary_account": SQUAD_TEST_BENEFICIARY_ACCOUNT,
     }
 
