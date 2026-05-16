@@ -25,7 +25,9 @@ except ValueError:
     ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 # Password hashing setup
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# PBKDF2 is more portable across hosting environments than bcrypt-only.
+# Keep bcrypt in the verify list so any existing hashes still validate.
+pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
 
 # ─── Logic ──────────────────────────────────────────────────
 

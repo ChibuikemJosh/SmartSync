@@ -31,8 +31,8 @@ class UserStore:
         try:
             if db.is_available():
                 return db.get_user_by_email(email)
-        except Exception:
-            logging.warning("Database unreachable, checking fallback store.")
+        except Exception as e:
+            logging.warning(f"Database lookup failed for {email}: {e}. Checking fallback store.")
         return _in_memory_users.get(email)
 
     @staticmethod
@@ -79,36 +79,48 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 @router.post("/register", response_model=UserProfile)
 async def register_user(user: UserCreate):
-    if UserStore.get_by_email(user.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
+    try:
+        if UserStore.get_by_email(user.email):
+            raise HTTPException(status_code=400, detail="Email already registered")
 
-    user_dict = user.model_dump()
-    user_dict["password"] = hash_password(user.password)
-    user_dict["trust_score"] = 43 # Default score
-    
-    UserStore.save(user_dict)
+        user_dict = user.model_dump()
+        user_dict["password"] = hash_password(user.password)
+        user_dict["trust_score"] = 43 # Default score
+        
+        UserStore.save(user_dict)
 
-    return UserProfile(
-        id=user.id,
-        name=user.name,
-        email=user.email,
-        role=user.role,
-        location=user.location,
-        tier=TierInfo(name="New", color="#2196F3", next_milestone=45)
-    )
+        return UserProfile(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            role=user.role,
+            location=user.location,
+            tier=TierInfo(name="New", color="#2196F3", next_milestone=45)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Register failed for {user.email}: {e}")
+        raise HTTPException(status_code=500, detail="Could not create account right now. Please try again.")
 
 @router.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = UserStore.get_by_email(form_data.username)
-    
-    if not user or not verify_password(form_data.password, user['password']):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Invalid email or password"
-        )
+    try:
+        user = UserStore.get_by_email(form_data.username)
+        
+        if not user or not verify_password(form_data.password, user['password']):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Invalid email or password"
+            )
 
-    access_token = create_access_token(data={"sub": user['id']})
-    return {"access_token": access_token, "token_type": "bearer"}
+        access_token = create_access_token(data={"sub": user['id']})
+        return {"access_token": access_token, "token_type": "bearer"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Login failed for {form_data.username}: {e}")
+        raise HTTPException(status_code=500, detail="Could not login right now. Please try again.")
 
 @router.get("/me", response_model=UserProfile)
 async def get_me(current_user: dict = Depends(get_current_user)):
