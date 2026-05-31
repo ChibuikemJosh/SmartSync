@@ -6,8 +6,8 @@ pydantic==2.7.4
 pydantic-settings==2.3.4
 python-dotenv==1.0.0
 groq==0.5.0
-neo4j
-redis
-numpy
+neo4j==5.18.0
+redis==5.0.4
+numpy==1.26.4
 python-jose[cryptography]
-passlib
+passlib==4.1.2
